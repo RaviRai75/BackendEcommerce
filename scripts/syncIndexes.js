@@ -1,0 +1,75 @@
+#!/usr/bin/env node
+/**
+ * Builds every index declared by the models.
+ *
+ * `autoIndex` is disabled in production (see src/config/database.js), because
+ * implicitly building indexes on boot can stall a deploy and mask a mistake.
+ * Instead this runs as an explicit deployment step:
+ *
+ *   npm run db:indexes
+ *
+ * Safe to re-run — MongoDB ignores an index that already exists.
+ */
+import {
+  connectDatabase,
+  disconnectDatabase,
+  syncIndexes,
+} from "../src/config/database.js";
+import { env } from "../src/config/env.js";
+import { assertMediaAssetMigrationReady } from "../src/services/media/mediaMigration.js";
+
+// Importing a model registers it with Mongoose, which is what `syncIndexes`
+// iterates over. Every model must be imported here to be included.
+import "../src/modules/users/user.model.js";
+import "../src/modules/auth/session.model.js";
+import "../src/modules/auth/passwordResetToken.model.js";
+import "../src/modules/shipping/pincode.model.js";
+import "../src/modules/categories/category.model.js";
+import "../src/modules/collections/collection.model.js";
+import "../src/modules/products/product.model.js";
+import "../src/modules/wishlist/wishlist.model.js";
+import "../src/modules/cart/cart.model.js";
+import "../src/modules/addresses/address.model.js";
+import "../src/modules/coupons/coupon.model.js";
+import "../src/modules/orders/order.model.js";
+import "../src/modules/orders/customerCommerceState.model.js";
+import "../src/modules/orders/inventoryTransaction.model.js";
+import "../src/modules/orders/couponRedemption.model.js";
+import "../src/modules/orders/couponCustomerUsage.model.js";
+import "../src/modules/orders/orderPlacementSettings.model.js";
+import "../src/modules/exchanges/exchange.model.js";
+import "../src/modules/exchanges/exchangePolicy.model.js";
+import "../src/modules/payments/payment.model.js";
+import "../src/modules/payments/paymentEvent.model.js";
+import "../src/modules/media/mediaAsset.model.js";
+import "../src/modules/settings/settings.model.js";
+import "../src/modules/system/seedRun.model.js";
+import "../src/modules/system/auditLog.model.js";
+
+async function main() {
+  console.log(`  Connecting to database "${env.MONGODB_DB_NAME}" …`);
+  await connectDatabase();
+  await assertMediaAssetMigrationReady();
+
+  const results = await syncIndexes();
+
+  console.log("");
+  for (const { model, indexes } of results.sort((a, b) =>
+    a.model.localeCompare(b.model),
+  )) {
+    console.log(`    ${model.padEnd(24)}${indexes} index(es)`);
+  }
+  console.log("");
+  console.log("  Indexes are up to date.");
+}
+
+main()
+  .then(async () => {
+    await disconnectDatabase();
+    process.exit(0);
+  })
+  .catch(async (error) => {
+    console.error("  Index sync failed:", error.message);
+    await disconnectDatabase().catch(() => {});
+    process.exit(1);
+  });

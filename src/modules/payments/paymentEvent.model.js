@@ -1,0 +1,60 @@
+import {
+  createSchema,
+  ref,
+  registerModel,
+  shortText,
+} from "../../utils/schema.js";
+import { PaymentProvider } from "./payment.model.js";
+
+export const PaymentEventType = Object.freeze({
+  PAYMENT_SUCCEEDED: "PAYMENT_SUCCEEDED",
+  PAYMENT_FAILED: "PAYMENT_FAILED",
+  REFUND_SUCCEEDED: "REFUND_SUCCEEDED",
+});
+
+export const PaymentEventStatus = Object.freeze({
+  PROCESSED: "PROCESSED",
+  IGNORED: "IGNORED",
+  RECONCILIATION_REQUIRED: "RECONCILIATION_REQUIRED",
+});
+
+const paymentEventSchema = createSchema(
+  {
+    provider: {
+      type: String,
+      required: true,
+      enum: Object.values(PaymentProvider),
+      immutable: true,
+    },
+    eventId: shortText({ required: true, max: 100, immutable: true }),
+    eventType: {
+      type: String,
+      required: true,
+      enum: Object.values(PaymentEventType),
+      immutable: true,
+    },
+    payloadHash: shortText({ required: true, max: 64, immutable: true }),
+    payment: { ...ref("Payment", { required: true }), immutable: true },
+    order: { ...ref("Order", { required: true }), immutable: true },
+    providerReference: shortText({
+      required: true,
+      max: 100,
+      immutable: true,
+    }),
+    providerPaymentId: shortText({ max: 100, immutable: true }),
+    status: {
+      type: String,
+      required: true,
+      enum: Object.values(PaymentEventStatus),
+    },
+    occurredAt: { type: Date, required: true, immutable: true },
+  },
+  { collection: "paymentEvents", privateFields: ["payloadHash"] },
+);
+
+paymentEventSchema.index({ provider: 1, eventId: 1 }, { unique: true });
+paymentEventSchema.index({ payment: 1, occurredAt: -1 });
+paymentEventSchema.index({ order: 1, occurredAt: -1 });
+paymentEventSchema.index({ status: 1, createdAt: 1 });
+
+export const PaymentEvent = registerModel("PaymentEvent", paymentEventSchema);

@@ -1,0 +1,27 @@
+node_modules/
+
+# Secrets — never commit (security §30)
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test and build output
+coverage/
+dist/
+.vitest/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local scratch
+tmp/
+*.local
