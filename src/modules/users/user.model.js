@@ -19,12 +19,12 @@ import {
   ref,
   registerModel,
   shortText,
-} from '../../utils/schema.js';
+} from "../../utils/schema.js";
 
 /** Roles. STAFF and MANAGER are named in the specification as future additions. */
 export const UserRole = {
-  USER: 'USER',
-  ADMIN: 'ADMIN',
+  USER: "USER",
+  ADMIN: "ADMIN",
 };
 
 /** Failed attempts before an account is temporarily locked (security §9). */
@@ -55,7 +55,7 @@ const userSchema = createSchema(
     phone: {
       type: String,
       trim: true,
-      match: [/^[6-9]\d{9}$/, 'Not a valid 10-digit Indian mobile number.'],
+      match: [/^[6-9]\d{9}$/, "Not a valid 10-digit Indian mobile number."],
     },
 
     role: {
@@ -77,6 +77,9 @@ const userSchema = createSchema(
      * having to look up a revocation list on every request (security §29).
      */
     tokenVersion: { type: Number, default: 0, min: 0 },
+
+    /** Monotonic generation used to supersede reset tokens and queued deliveries. */
+    passwordResetVersion: { type: Number, default: 0, min: 0 },
 
     /** Recorded so a customer can be told when their password last changed. */
     passwordChangedAt: { type: Date },
@@ -107,14 +110,14 @@ const userSchema = createSchema(
     /** Set only by a seeder, so demo accounts are never mistaken for real ones. */
     isDemoData: demoFlag(),
 
-    /** Populated in Task 33; declared here so the shape is stable. */
-    referredBy: ref('User'),
+    /** Reserved for a future approved referral-attribution workflow. */
+    referredBy: ref("User"),
   },
   {
-    collection: 'users',
+    collection: "users",
     // Belt and braces: even if a controller returns a document that selected
     // these, they cannot reach a response body.
-    privateFields: ['passwordHash', 'totpSecret'],
+    privateFields: ["passwordHash", "totpSecret"],
   },
 );
 
@@ -159,4 +162,4 @@ userSchema.methods.toPublicProfile = function toPublicProfile() {
   };
 };
 
-export const User = registerModel('User', userSchema);
+export const User = registerModel("User", userSchema);

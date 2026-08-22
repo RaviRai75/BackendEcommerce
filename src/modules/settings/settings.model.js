@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import {
   createSchema,
+  paise,
   ref,
   registerModel,
   shortText,
@@ -21,6 +22,45 @@ export const DEFAULT_ANNOUNCEMENT = Object.freeze({
   message: "Made in Karnataka • Traditional with a modern touch",
   tone: AnnouncementTone.WINE,
 });
+
+export const DEFAULT_REFERRAL_PROGRAM = Object.freeze({
+  enabled: false,
+  friendDiscountPaise: 0,
+  referrerRewardPaise: 0,
+  minimumPurchasePaise: 0,
+});
+
+export const DEFAULT_LOYALTY_PROGRAM = Object.freeze({
+  enabled: false,
+  earningPoints: 0,
+  earningSpendPaise: 0,
+  redemptionPoints: 0,
+  redemptionValuePaise: 0,
+  expiryDays: 0,
+});
+
+export function referralProgramIsValid(program) {
+  return (
+    !program?.enabled ||
+    (Number.isInteger(program.friendDiscountPaise) &&
+      program.friendDiscountPaise > 0 &&
+      Number.isInteger(program.referrerRewardPaise) &&
+      program.referrerRewardPaise > 0)
+  );
+}
+
+export function loyaltyProgramIsValid(program) {
+  return (
+    !program?.enabled ||
+    [
+      program.earningPoints,
+      program.earningSpendPaise,
+      program.redemptionPoints,
+      program.redemptionValuePaise,
+      program.expiryDays,
+    ].every((value) => Number.isInteger(value) && value > 0)
+  );
+}
 
 function announcementMessageIsValid(announcement) {
   return (
@@ -64,6 +104,79 @@ announcementSchema.pre("validate", function validateAnnouncementMessage() {
   }
 });
 
+const referralProgramSchema = new mongoose.Schema(
+  {
+    enabled: { type: Boolean, required: true, default: false },
+    friendDiscountPaise: paise({ required: true, default: 0 }),
+    referrerRewardPaise: paise({ required: true, default: 0 }),
+    minimumPurchasePaise: paise({ required: true, default: 0 }),
+  },
+  { strict: "throw", _id: false, versionKey: false },
+);
+
+referralProgramSchema.pre("validate", function validateEnabledTerms() {
+  if (!this.enabled) return;
+  if (this.friendDiscountPaise <= 0) {
+    this.invalidate(
+      "friendDiscountPaise",
+      "Enabled referral programs require a positive friend discount.",
+    );
+  }
+  if (this.referrerRewardPaise <= 0) {
+    this.invalidate(
+      "referrerRewardPaise",
+      "Enabled referral programs require a positive referrer reward.",
+    );
+  }
+});
+
+function wholeNumber({ max, label }) {
+  return {
+    type: Number,
+    required: true,
+    default: 0,
+    min: [0, `${label} cannot be negative.`],
+    max: [max, `${label} is implausibly large.`],
+    validate: {
+      validator: Number.isInteger,
+      message: `${label} must be a whole number.`,
+    },
+  };
+}
+
+const loyaltyProgramSchema = new mongoose.Schema(
+  {
+    enabled: { type: Boolean, required: true, default: false },
+    earningPoints: wholeNumber({ max: 1_000_000, label: "Earning points" }),
+    earningSpendPaise: paise({ required: true, default: 0 }),
+    redemptionPoints: wholeNumber({
+      max: 1_000_000,
+      label: "Redemption points",
+    }),
+    redemptionValuePaise: paise({ required: true, default: 0 }),
+    expiryDays: wholeNumber({ max: 3650, label: "Expiry days" }),
+  },
+  { strict: "throw", _id: false, versionKey: false },
+);
+
+loyaltyProgramSchema.pre("validate", function validateEnabledLoyaltyTerms() {
+  if (!this.enabled) return;
+  for (const field of [
+    "earningPoints",
+    "earningSpendPaise",
+    "redemptionPoints",
+    "redemptionValuePaise",
+    "expiryDays",
+  ]) {
+    if (this[field] <= 0) {
+      this.invalidate(
+        field,
+        "Enabled loyalty policies require every rate and expiry value to be positive.",
+      );
+    }
+  }
+});
+
 const imageAttachmentSchema = new mongoose.Schema(
   {
     assetId: ref("MediaAsset", { required: true }),
@@ -101,6 +214,26 @@ const settingsSchema = createSchema(
       validate: {
         validator: announcementMessageIsValid,
         message: "Enabled announcements require a message.",
+      },
+    },
+    referralProgram: {
+      type: referralProgramSchema,
+      required: true,
+      default: () => ({ ...DEFAULT_REFERRAL_PROGRAM }),
+      validate: {
+        validator: referralProgramIsValid,
+        message:
+          "Enabled referral programs require positive discount and reward values.",
+      },
+    },
+    loyaltyProgram: {
+      type: loyaltyProgramSchema,
+      required: true,
+      default: () => ({ ...DEFAULT_LOYALTY_PROGRAM }),
+      validate: {
+        validator: loyaltyProgramIsValid,
+        message:
+          "Enabled loyalty policies require positive rate and expiry values.",
       },
     },
     homeHeroMedia: { type: imageAttachmentSchema, default: null },

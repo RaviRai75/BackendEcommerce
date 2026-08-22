@@ -85,13 +85,29 @@ async function releaseCatalogueLock({ collection, token }) {
  * deployment/fault tests; application callers always use topology detection
  * and the built-in ownership-checked release.
  */
-export async function withCatalogueWrite(work, options = {}) {
-  const transactional = options.transactional ?? (await supportsTransactions());
+export async function withCatalogueLock(work, options = {}) {
   const release = options.release ?? releaseCatalogueLock;
   const lock = await acquireCatalogueLock();
-
   try {
-    if (!transactional) return await work(null);
+    return await work();
+  } finally {
+    try {
+      await release(lock);
+    } catch (error) {
+      // A protected mutation may already be durable. Cleanup must never turn
+      // that success into an error response or prevent its audit from running.
+      log.error(
+        { err: error, lockId: LOCK_ID },
+        "failed to release catalogue mutex; operator recovery required",
+      );
+    }
+  }
+}
+
+export async function withCatalogueWrite(work, options = {}) {
+  const transactional = options.transactional ?? (await supportsTransactions());
+  return withCatalogueLock(async () => {
+    if (!transactional) return work(null);
 
     const session = await mongoose.startSession();
     try {
@@ -103,16 +119,5 @@ export async function withCatalogueWrite(work, options = {}) {
     } finally {
       await session.endSession();
     }
-  } finally {
-    try {
-      await release(lock);
-    } catch (error) {
-      // The protected mutation may already be durable. Cleanup must never turn
-      // that success into an error response or prevent its audit from running.
-      log.error(
-        { err: error, lockId: LOCK_ID },
-        "failed to release catalogue mutex; operator recovery required",
-      );
-    }
-  }
+  }, options);
 }

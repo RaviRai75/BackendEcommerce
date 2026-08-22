@@ -1,8 +1,11 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
-import { searchLimiter } from "../../middleware/rateLimiters.js";
+import { searchLimiter, uploadLimiter } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
+import { AppError } from "../../utils/AppError.js";
+import { ErrorCode } from "../../utils/errorCodes.js";
 import {
+  adjustProductStock,
   createProduct,
   getAdminProduct,
   getProduct,
@@ -14,6 +17,17 @@ import {
   updateProduct,
 } from "./product.controller.js";
 import {
+  confirmProductImport,
+  exportProductsCsv,
+  getProductImport,
+  previewProductImport,
+} from "./productImport.controller.js";
+import {
+  PRODUCT_CSV_MAX_BYTES,
+  productImportIdempotencyKeySchema,
+  productImportIdParamSchema,
+} from "./productCsv.validator.js";
+import {
   adminProductListQuerySchema,
   createProductSchema,
   productIdParamSchema,
@@ -21,8 +35,78 @@ import {
   productSlugParamSchema,
   productStatusSchema,
   relatedProductsQuerySchema,
+  stockAdjustmentIdempotencyKeySchema,
+  stockAdjustmentParamsSchema,
+  stockAdjustmentSchema,
   updateProductSchema,
 } from "./product.validator.js";
+
+function preventPrivateCaching(_req, res, next) {
+  res.set("Cache-Control", "private, no-store");
+  next();
+}
+
+function requireUtf8Csv(req, _res, next) {
+  const contentType = req.get("content-type") ?? "";
+  const [mediaType, ...parameters] = contentType.split(";");
+  const charset = parameters
+    .map((entry) => entry.trim().split("="))
+    .find(([name]) => name?.toLowerCase() === "charset")?.[1]
+    ?.replace(/^"|"$/g, "")
+    .toLowerCase();
+  const contentEncoding = (
+    req.get("content-encoding") ?? "identity"
+  ).toLowerCase();
+  if (
+    mediaType.trim().toLowerCase() !== "text/csv" ||
+    (charset && charset !== "utf-8" && charset !== "utf8") ||
+    contentEncoding !== "identity"
+  ) {
+    next(new AppError(ErrorCode.UNSUPPORTED_MEDIA_TYPE));
+    return;
+  }
+  next();
+}
+
+const productCsvBody = express.raw({
+  type: () => true,
+  limit: PRODUCT_CSV_MAX_BYTES,
+  inflate: false,
+});
+
+function requireImportIdempotencyKey(req, _res, next) {
+  const parsed = productImportIdempotencyKeySchema.safeParse(
+    req.get("Idempotency-Key"),
+  );
+  if (!parsed.success) {
+    next(
+      AppError.validation({
+        idempotencyKey:
+          "Provide a high-entropy Idempotency-Key of 32 to 200 printable characters.",
+      }),
+    );
+    return;
+  }
+  req.idempotencyKey = parsed.data;
+  next();
+}
+
+function requireStockAdjustmentIdempotencyKey(req, _res, next) {
+  const parsed = stockAdjustmentIdempotencyKeySchema.safeParse(
+    req.get("Idempotency-Key"),
+  );
+  if (!parsed.success) {
+    next(
+      AppError.validation({
+        idempotencyKey:
+          "Provide a high-entropy Idempotency-Key of 32 to 200 printable characters.",
+      }),
+    );
+    return;
+  }
+  req.idempotencyKey = parsed.data;
+  next();
+}
 
 export const productRoutes = Router();
 
@@ -50,6 +134,52 @@ productRoutes.get(
 );
 
 // ADMIN
+productRoutes.post(
+  "/admin/products/imports/preview",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  requireUtf8Csv,
+  uploadLimiter,
+  productCsvBody,
+  previewProductImport,
+);
+productRoutes.get(
+  "/admin/products/export.csv",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  exportProductsCsv,
+);
+productRoutes.get(
+  "/admin/products/imports/:id",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({ params: productImportIdParamSchema }),
+  getProductImport,
+);
+productRoutes.post(
+  "/admin/products/imports/:id/confirm",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  uploadLimiter,
+  requireImportIdempotencyKey,
+  validate({ params: productImportIdParamSchema }),
+  confirmProductImport,
+);
+productRoutes.post(
+  "/admin/products/:productId/variants/:variantId/stock-adjustments",
+  requireAuth,
+  requireAdmin,
+  requireStockAdjustmentIdempotencyKey,
+  validate({
+    params: stockAdjustmentParamsSchema,
+    body: stockAdjustmentSchema,
+  }),
+  adjustProductStock,
+);
 productRoutes.get(
   "/admin/products",
   requireAuth,

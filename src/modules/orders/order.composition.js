@@ -8,7 +8,11 @@ import {
 } from "../collections/collection.model.js";
 import { evaluateCoupon } from "../coupons/coupon.evaluation.js";
 import { Coupon } from "../coupons/coupon.model.js";
-import { Product, ProductStatus } from "../products/product.model.js";
+import {
+  Product,
+  ProductStatus,
+  ProductVariantStatus,
+} from "../products/product.model.js";
 import { Pincode } from "../shipping/pincode.model.js";
 import { CouponCustomerUsage } from "./couponCustomerUsage.model.js";
 import { OrderPaymentMethod } from "./order.model.js";
@@ -99,7 +103,9 @@ async function authoritativeCart(lines, session) {
       );
     if (!publiclyEligible) throw new AppError(ErrorCode.PRODUCT_UNAVAILABLE);
     const variant = product.variants.find(
-      (candidate) => String(candidate._id) === String(line.variant),
+      (candidate) =>
+        String(candidate._id) === String(line.variant) &&
+        candidate.status !== ProductVariantStatus.RETIRED,
     );
     if (!variant) throw new AppError(ErrorCode.SIZE_UNAVAILABLE);
     if (variant.stock < line.quantity)

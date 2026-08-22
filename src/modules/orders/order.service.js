@@ -3,9 +3,19 @@ import mongoose from "mongoose";
 import { supportsTransactions } from "../../config/database.js";
 import { AppError } from "../../utils/AppError.js";
 import { ErrorCode } from "../../utils/errorCodes.js";
+import { abandonedCartEventService } from "../cart/abandonedCartEvent.service.js";
 import { Cart } from "../cart/cart.model.js";
 import { Coupon } from "../coupons/coupon.model.js";
-import { Product, ProductStatus } from "../products/product.model.js";
+import {
+  Product,
+  ProductStatus,
+  ProductVariantStatus,
+} from "../products/product.model.js";
+import { notificationService } from "../notifications/notification.service.js";
+import {
+  NotificationTargetKind,
+  NotificationType,
+} from "../notifications/notification.model.js";
 import { auditService } from "../system/audit.service.js";
 import { AuditAction, AuditTargetType } from "../system/auditLog.model.js";
 import { getPaymentCapabilities } from "../../services/payment/index.js";
@@ -37,6 +47,8 @@ import {
   OrderPlacementStatus,
 } from "./order.model.js";
 import { assertPlacementReleasable } from "./order.stateMachine.js";
+import { releaseOrderResources } from "./orderRelease.service.js";
+import { Shipment, ShipmentDirection } from "../shipping/shipment.model.js";
 import {
   EXCHANGE_POLICY_KEY,
   ExchangePolicy,
@@ -44,6 +56,7 @@ import {
 } from "../exchanges/exchangePolicy.model.js";
 
 const MAX_TRANSACTION_ATTEMPTS = 5;
+const MAX_DETAIL_READ_ATTEMPTS = 3;
 const wait = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 const sha256 = (value) =>
@@ -249,27 +262,41 @@ async function consumeCoupon({ coupon, userId, orderId, session }) {
 
 async function deductStockAndLedger(lines, orderId, session) {
   for (const line of lines) {
-    const result = await Product.updateOne(
+    const product = await Product.findOneAndUpdate(
       {
         _id: line.productId,
         status: ProductStatus.PUBLISHED,
         variants: {
-          $elemMatch: { _id: line.variantId, stock: { $gte: line.quantity } },
+          $elemMatch: {
+            _id: line.variantId,
+            status: { $ne: ProductVariantStatus.RETIRED },
+            stock: { $gte: line.quantity },
+          },
         },
       },
-      { $inc: { "variants.$[selected].stock": -line.quantity } },
       {
+        $inc: {
+          "variants.$[selected].stock": -line.quantity,
+          __v: 1,
+        },
+      },
+      {
+        new: false,
         session,
         arrayFilters: [
           {
             "selected._id": line.variantId,
+            "selected.status": { $ne: ProductVariantStatus.RETIRED },
             "selected.stock": { $gte: line.quantity },
           },
         ],
       },
-    );
-    if (result.modifiedCount !== 1) throw new AppError(ErrorCode.STOCK_CHANGED);
-    await InventoryTransaction.create(
+    ).select("name status variants");
+    if (!product) throw new AppError(ErrorCode.STOCK_CHANGED);
+    const variant = product.variants.id(line.variantId);
+    if (!variant) throw new AppError(ErrorCode.STOCK_CHANGED);
+
+    const [transaction] = await InventoryTransaction.create(
       [
         {
           order: orderId,
@@ -281,7 +308,60 @@ async function deductStockAndLedger(lines, orderId, session) {
       ],
       { session },
     );
+    await notificationService.observeLowStockTransition(
+      {
+        productId: product._id,
+        variantId: variant._id,
+        productName: product.name,
+        sku: variant.sku,
+        beforeStock: variant.stock,
+        afterStock: variant.stock - line.quantity,
+        threshold: variant.lowStockThreshold,
+        productStatus: product.status,
+        variantStatus: variant.status,
+        sourceType: InventoryReason.ORDER_PLACED,
+        sourceId: transaction._id,
+        occurredAt: transaction.createdAt,
+      },
+      { session },
+    );
   }
+}
+
+async function publishOrderPlacedNotifications(order, occurredAt, session) {
+  const customerTarget = {
+    kind: NotificationTargetKind.ORDER,
+    reference: order.orderNumber,
+  };
+  await notificationService.publish(
+    {
+      eventKey: `order:${order._id}:v:0:${NotificationType.ORDER_CONFIRMATION}`,
+      type: NotificationType.ORDER_CONFIRMATION,
+      occurredAt,
+      payload: {},
+      customer: {
+        userId: order.user,
+        email: order.shippingAddress.email,
+        name: order.shippingAddress.recipientName,
+      },
+      customerTarget,
+    },
+    { session },
+  );
+  await notificationService.publish(
+    {
+      eventKey: `order:${order._id}:v:0:${NotificationType.ADMIN_NEW_ORDER}`,
+      type: NotificationType.ADMIN_NEW_ORDER,
+      occurredAt,
+      payload: {},
+      notifyAdmins: true,
+      adminTarget: {
+        kind: NotificationTargetKind.ORDER,
+        reference: order.orderNumber,
+      },
+    },
+    { session },
+  );
 }
 
 async function auditCreated(order, actor, req) {
@@ -350,6 +430,8 @@ const CUSTOMER_ORDER_LIST_FIELDS = [
 ].join(" ");
 
 const CUSTOMER_ORDER_DETAIL_FIELDS = [
+  "_id",
+  "__v",
   "orderNumber",
   "paymentMethod",
   "placementStatus",
@@ -390,6 +472,7 @@ const CUSTOMER_ORDER_DETAIL_FIELDS = [
   "statusHistory.status",
   "statusHistory.at",
   "paidAt",
+  "deliveredAt",
   "createdAt",
   "updatedAt",
 ].join(" ");
@@ -415,14 +498,36 @@ export const orderService = {
   },
 
   async getMineByNumber(actor, orderNumber) {
-    const order = await Order.findOne({
-      user: actor._id,
-      orderNumber,
-    })
-      .select(CUSTOMER_ORDER_DETAIL_FIELDS)
-      .lean();
-    if (!order) throw new AppError(ErrorCode.ORDER_NOT_FOUND);
-    return customerOrderDetail(order);
+    for (let attempt = 1; attempt <= MAX_DETAIL_READ_ATTEMPTS; attempt += 1) {
+      const order = await Order.findOne({
+        user: actor._id,
+        orderNumber,
+      })
+        .select(CUSTOMER_ORDER_DETAIL_FIELDS)
+        .lean();
+      if (!order) throw new AppError(ErrorCode.ORDER_NOT_FOUND);
+
+      const shipment = await Shipment.findOne({
+        order: order._id,
+        direction: ShipmentDirection.FORWARD,
+      })
+        .select(
+          "courier trackingId status milestones.status milestones.at shippedAt outForDeliveryAt deliveredAt",
+        )
+        .lean();
+      const unchanged = await Order.exists({
+        _id: order._id,
+        user: actor._id,
+        orderNumber,
+        __v: order.__v,
+      });
+      if (unchanged) return customerOrderDetail(order, shipment);
+    }
+
+    throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {
+      message:
+        "The order changed while it was being loaded. Refresh and try again.",
+    });
   },
 
   async quote(actor, input) {
@@ -479,8 +584,11 @@ export const orderService = {
       throw new AppError(ErrorCode.PAYMENT_METHOD_UNAVAILABLE);
     if (!(await supportsTransactions())) throw settingsUnavailable();
 
-    const cart = await Cart.findOne({ user: userId }).select("lines").lean();
+    const cart = await Cart.findOne({ user: userId })
+      .select("lines activityRevision updatedAt")
+      .lean();
     const snapshot = capturedLines(cart);
+    const snapshotRevision = cart?.activityRevision ?? 0;
     if (snapshot.length === 0) throw new AppError(ErrorCode.CART_EMPTY);
     const orderId = new mongoose.Types.ObjectId();
     const orderNumber = `ORD_${crypto.randomBytes(16).toString("base64url")}`;
@@ -521,8 +629,23 @@ export const orderService = {
         await deductStockAndLedger(cartPricing.lines, orderId, session);
         if (coupon) await consumeCoupon({ coupon, userId, orderId, session });
         const clear = await Cart.updateOne(
-          { _id: cart._id, user: userId, lines: snapshot },
-          { $set: { lines: [] } },
+          {
+            _id: cart._id,
+            user: userId,
+            lines: snapshot,
+            ...(snapshotRevision === 0
+              ? {
+                  $or: [
+                    { activityRevision: 0 },
+                    { activityRevision: { $exists: false } },
+                  ],
+                }
+              : { activityRevision: snapshotRevision }),
+          },
+          {
+            $set: { lines: [] },
+            $inc: { activityRevision: 1 },
+          },
           { session },
         );
         const cartCleared = clear.modifiedCount === 1;
@@ -588,6 +711,7 @@ export const orderService = {
           ],
           { session },
         );
+        await publishOrderPlacedNotifications(order, now, session);
         return order;
       });
     } catch (error) {
@@ -599,6 +723,30 @@ export const orderService = {
       throw error;
     }
 
+    if (committed.cartCleared && snapshotRevision > 0) {
+      const placedAt =
+        committed.statusHistory.find(
+          (entry) =>
+            entry.domain === "PLACEMENT" &&
+            entry.status === OrderPlacementStatus.PLACED,
+        )?.at ?? committed.createdAt;
+      await abandonedCartEventService.recordConversion({
+        ownerId: userId,
+        orderId: committed._id,
+        cartRevision: snapshotRevision,
+        cart: {
+          lines: committed.items.map((line) => ({
+            productId: line.productId,
+            variantId: line.variantId,
+            quantity: line.quantity,
+            unitPricePaise: line.unitPricePaise,
+          })),
+          merchandiseSubtotalPaise: committed.pricing.merchandiseSubtotalPaise,
+        },
+        activityAt: cart.updatedAt,
+        placedAt,
+      });
+    }
     await auditCreated(committed, actor, req);
     return { replayed: false, receipt: orderReceipt(committed) };
   },
@@ -612,64 +760,17 @@ export const orderService = {
       if (!order) throw new AppError(ErrorCode.ORDER_NOT_FOUND);
       if (!assertPlacementReleasable(order))
         return { replayed: true, receipt: orderReceipt(order) };
-      for (const line of order.items) {
-        const restored = await Product.updateOne(
-          { _id: line.productId, "variants._id": line.variantId },
-          { $inc: { "variants.$[selected].stock": line.quantity } },
-          { session, arrayFilters: [{ "selected._id": line.variantId }] },
-        );
-        if (restored.modifiedCount !== 1) throw settingsUnavailable();
-        await InventoryTransaction.create(
-          [
-            {
-              order: order._id,
-              product: line.productId,
-              variant: line.variantId,
-              reason: InventoryReason.ORDER_RELEASED,
-              quantityDelta: line.quantity,
-              note: normalizedReason,
-            },
-          ],
-          { session },
-        );
-      }
-      const redemption = await CouponRedemption.findOne({
-        order: order._id,
-        status: CouponRedemptionStatus.CONSUMED,
-      }).session(session);
-      if (redemption) {
-        const global = await Coupon.updateOne(
-          { _id: redemption.coupon, usageCount: { $gt: 0 } },
-          { $inc: { usageCount: -1 } },
-          { session },
-        );
-        if (global.modifiedCount !== 1) throw settingsUnavailable();
-        if (redemption.countedPerCustomer) {
-          const customer = await CouponCustomerUsage.updateOne(
-            {
-              coupon: redemption.coupon,
-              user: redemption.user,
-              usageCount: { $gt: 0 },
-            },
-            { $inc: { usageCount: -1 } },
-            { session },
-          );
-          if (customer.modifiedCount !== 1) throw settingsUnavailable();
-        }
-        redemption.status = CouponRedemptionStatus.RELEASED;
-        redemption.releasedAt = new Date();
-        redemption.releaseReason = normalizedReason;
-        redemption.history.push({
-          status: CouponRedemptionStatus.RELEASED,
-          at: redemption.releasedAt,
-          reason: normalizedReason,
-        });
-        await redemption.save({ session });
-      }
+      const releasedAt = new Date();
+      await releaseOrderResources({
+        order,
+        reason: normalizedReason,
+        at: releasedAt,
+        session,
+      });
       order.placementStatus = OrderPlacementStatus.RELEASED;
       order.paymentStatus = OrderPaymentStatus.CANCELLED;
       order.fulfillmentStatus = OrderFulfillmentStatus.CANCELLED;
-      order.releasedAt = new Date();
+      order.releasedAt = releasedAt;
       order.releaseReason = normalizedReason;
       order.statusHistory.push(
         {

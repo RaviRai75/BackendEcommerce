@@ -1,15 +1,20 @@
 import { Router } from "express";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAdmin, requireAuth } from "../../middleware/auth.js";
 import { orderLimiter, quoteLimiter } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
 import { AppError } from "../../utils/AppError.js";
 import {
+  getAdminOrder,
   getOrder,
+  listAdminOrders,
   listOrders,
+  performAdminOrderAction,
   placeOrder,
   quoteOrder,
 } from "./order.controller.js";
 import {
+  adminOrderActionSchema,
+  adminOrderListQuerySchema,
   idempotencyKeySchema,
   orderListQuerySchema,
   orderNumberParamSchema,
@@ -66,4 +71,32 @@ orderRoutes.post(
   requireIdempotencyKey,
   validate({ body: placeOrderSchema }),
   placeOrder,
+);
+
+orderRoutes.get(
+  "/admin/orders",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({ query: adminOrderListQuerySchema }),
+  listAdminOrders,
+);
+orderRoutes.get(
+  "/admin/orders/:orderNumber",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({ params: orderNumberParamSchema }),
+  getAdminOrder,
+);
+orderRoutes.post(
+  "/admin/orders/:orderNumber/actions",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({
+    params: orderNumberParamSchema,
+    body: adminOrderActionSchema,
+  }),
+  performAdminOrderAction,
 );

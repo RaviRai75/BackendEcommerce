@@ -42,11 +42,6 @@ export const updateCategory = asyncHandler(async (req, res) => {
 export const setCategoryStatus = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await categoryService.setStatus(
-      req.params.id,
-      req.body.status,
-      req.user,
-      req,
-    ),
+    await categoryService.setStatus(req.params.id, req.body, req.user, req),
   );
 });

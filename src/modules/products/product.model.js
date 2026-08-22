@@ -9,6 +9,11 @@ import {
   shortText,
   slug,
 } from "../../utils/schema.js";
+import {
+  CustomizationMode,
+  customizationDefinitionSchema,
+} from "../customization/customizationConfig.js";
+import { SizeGuideMode } from "../sizeGuides/sizeGuide.model.js";
 import { cloudinaryMediaError } from "./cloudinaryMedia.js";
 
 export const ProductStatus = {
@@ -20,6 +25,11 @@ export const ProductStatus = {
 export const ProductMediaType = {
   IMAGE: "IMAGE",
   VIDEO: "VIDEO",
+};
+
+export const ProductVariantStatus = {
+  ACTIVE: "ACTIVE",
+  RETIRED: "RETIRED",
 };
 
 const variantSchema = new mongoose.Schema(
@@ -48,6 +58,13 @@ const variantSchema = new mongoose.Schema(
         message: "Low-stock threshold must be a whole number.",
       },
     },
+    status: {
+      type: String,
+      required: true,
+      enum: Object.values(ProductVariantStatus),
+      default: ProductVariantStatus.ACTIVE,
+    },
+    retiredAt: Date,
   },
   { strict: "throw", _id: true, versionKey: false },
 );
@@ -155,6 +172,43 @@ const productSchema = createSchema(
       validate: {
         validator: Number.isInteger,
         message: "Merchandising rank must be a whole number.",
+      },
+    },
+    customizationMode: {
+      type: String,
+      required: true,
+      enum: Object.values(CustomizationMode),
+      default: CustomizationMode.INHERIT,
+    },
+    customizationOverride: {
+      type: customizationDefinitionSchema,
+      default: undefined,
+      validate: {
+        validator(value) {
+          return this.customizationMode === CustomizationMode.OVERRIDE
+            ? Boolean(value)
+            : value === undefined || value === null;
+        },
+        message:
+          "A whole customization override is required only in OVERRIDE mode.",
+      },
+    },
+    sizeGuideMode: {
+      type: String,
+      required: true,
+      enum: Object.values(SizeGuideMode),
+      default: SizeGuideMode.DISABLED,
+    },
+    sizeGuideOverride: {
+      ...ref("SizeGuide"),
+      default: undefined,
+      validate: {
+        validator(value) {
+          return this.sizeGuideMode === SizeGuideMode.OVERRIDE
+            ? Boolean(value)
+            : value === undefined || value === null;
+        },
+        message: "A size-guide override is required only in OVERRIDE mode.",
       },
     },
     status: {

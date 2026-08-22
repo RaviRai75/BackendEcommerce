@@ -4,7 +4,11 @@ import {
   Collection,
   CollectionStatus,
 } from "../collections/collection.model.js";
-import { Product, ProductStatus } from "./product.model.js";
+import {
+  Product,
+  ProductStatus,
+  ProductVariantStatus,
+} from "./product.model.js";
 
 const MAX_PRICE_RUPEES = 10_000_000;
 const MAX_VOCABULARY_VALUES = 200;
@@ -204,12 +208,22 @@ async function loadPublicVocabulary() {
       $facet: {
         colours: [
           { $unwind: "$variants" },
+          {
+            $match: {
+              "variants.status": { $ne: ProductVariantStatus.RETIRED },
+            },
+          },
           { $group: { _id: "$variants.colour" } },
           { $sort: { _id: 1 } },
           { $limit: MAX_VOCABULARY_VALUES },
         ],
         sizes: [
           { $unwind: "$variants" },
+          {
+            $match: {
+              "variants.status": { $ne: ProductVariantStatus.RETIRED },
+            },
+          },
           { $group: { _id: "$variants.size" } },
           { $sort: { _id: 1 } },
           { $limit: MAX_VOCABULARY_VALUES },

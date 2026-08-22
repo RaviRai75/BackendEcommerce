@@ -22,8 +22,20 @@ export const OrderPaymentStatus = Object.freeze({
 });
 export const OrderFulfillmentStatus = Object.freeze({
   UNFULFILLED: "UNFULFILLED",
+  PROCESSING: "PROCESSING",
+  PACKED: "PACKED",
+  SHIPPED: "SHIPPED",
+  OUT_FOR_DELIVERY: "OUT_FOR_DELIVERY",
   DELIVERED: "DELIVERED",
   CANCELLED: "CANCELLED",
+});
+export const OrderFulfillmentAction = Object.freeze({
+  START_PROCESSING: "START_PROCESSING",
+  MARK_PACKED: "MARK_PACKED",
+  RECORD_SHIPMENT: "RECORD_SHIPMENT",
+  MARK_OUT_FOR_DELIVERY: "MARK_OUT_FOR_DELIVERY",
+  MARK_DELIVERED: "MARK_DELIVERED",
+  CANCEL: "CANCEL",
 });
 export const OrderPaymentMethod = Object.freeze({
   COD: "COD",
@@ -185,6 +197,15 @@ const historySchema = new mongoose.Schema(
     status: shortText({ required: true, max: 40 }),
     reason: shortText({ max: 160 }),
     at: { type: Date, required: true, default: Date.now },
+    action: {
+      type: String,
+      enum: Object.values(OrderFulfillmentAction),
+    },
+    actor: ref("User"),
+    // Private commit-reconciliation fields. Every API DTO deliberately omits
+    // these even from administrator responses.
+    requestId: shortText({ max: 128 }),
+    version: { type: Number, min: 1 },
   },
   { strict: "throw", _id: false, versionKey: false },
 );
@@ -252,6 +273,20 @@ orderSchema.index({ orderNumber: 1 }, { unique: true });
 orderSchema.index({ user: 1, idempotencyKeyHash: 1 }, { unique: true });
 orderSchema.index({ user: 1, customerOrderSequence: 1 }, { unique: true });
 orderSchema.index({ user: 1, createdAt: -1, _id: -1 });
+orderSchema.index({ createdAt: -1, _id: -1 });
 orderSchema.index({ placementStatus: 1, fulfillmentStatus: 1, createdAt: 1 });
+orderSchema.index({
+  fulfillmentStatus: 1,
+  paymentStatus: 1,
+  createdAt: -1,
+  _id: -1,
+});
+orderSchema.index({
+  placementStatus: 1,
+  fulfillmentStatus: 1,
+  paymentMethod: 1,
+  paymentStatus: 1,
+  deliveredAt: -1,
+});
 
 export const Order = registerModel("Order", orderSchema);

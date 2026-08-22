@@ -26,6 +26,8 @@ import {
 } from "../../modules/system/auditLog.model.js";
 import { cloudinaryProvider } from "./cloudinary.adapter.js";
 import { Exchange } from "../../modules/exchanges/exchange.model.js";
+import { CustomRequest } from "../../modules/customization/customRequest.model.js";
+import { Review } from "../../modules/reviews/review.model.js";
 
 const log = createLogger("media");
 const INTENT_TTL_MS = 10 * 60 * 1000;
@@ -268,6 +270,8 @@ async function hasPersistedMediaReference(assetId, session = null) {
     Collection.exists({ "editorialMedia.assetId": assetId }),
     SiteSettings.exists({ "homeHeroMedia.assetId": assetId }),
     Exchange.exists({ "photos.assetId": assetId }),
+    Review.exists({ "photo.assetId": assetId }),
+    CustomRequest.exists({ "references.assetId": assetId }),
   ];
   for (const query of referenceQueries) {
     if (session) query.session(session);
@@ -287,6 +291,8 @@ async function claimReadyEditorialOrphan(id, { now, cutoff }) {
           MediaPurpose.HOME_HERO,
           MediaPurpose.COLLECTION,
           MediaPurpose.EXCHANGE_REQUEST,
+          MediaPurpose.REVIEW,
+          MediaPurpose.CUSTOM_REQUEST_REFERENCE,
         ],
       },
       uploadedAt: { $lte: cutoff },
@@ -321,7 +327,7 @@ export const mediaService = {
       input.type !== ProductMediaType.IMAGE
     ) {
       throw new AppError(ErrorCode.UNSUPPORTED_FILE_TYPE, {
-        message: "Home hero and collection media must be images.",
+        message: "This media purpose accepts images only.",
       });
     }
     const policy = POLICY[input.type];
@@ -529,6 +535,8 @@ export const mediaService = {
           MediaPurpose.HOME_HERO,
           MediaPurpose.COLLECTION,
           MediaPurpose.EXCHANGE_REQUEST,
+          MediaPurpose.REVIEW,
+          MediaPurpose.CUSTOM_REQUEST_REFERENCE,
         ],
       },
       uploadedAt: { $lte: editorialCutoff },
@@ -752,6 +760,28 @@ export const mediaService = {
           message: `One or more ${label} items have not been verified.`,
         });
       }
+    }
+  },
+
+  async assertOwnedReadyMedia(
+    media,
+    actor,
+    { purpose, session = null, label = "media" } = {},
+  ) {
+    await this.assertReadyMedia(media, { purpose, session, label });
+    const items = Array.isArray(media) ? media : media ? [media] : [];
+    if (items.length === 0) return;
+    const query = MediaAsset.countDocuments({
+      _id: { $in: items.map((item) => item.assetId) },
+      createdBy: actorId(actor),
+      purpose,
+      status: MediaAssetStatus.READY,
+    });
+    if (session) query.session(session);
+    if ((await query) !== items.length) {
+      throw new AppError(ErrorCode.VALIDATION_ERROR, {
+        message: `One or more ${label} items are not owned by this account.`,
+      });
     }
   },
 

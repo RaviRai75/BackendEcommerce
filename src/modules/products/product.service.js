@@ -5,6 +5,11 @@ import {
   saveOptions,
   withCatalogueWrite,
 } from "../catalogue/catalogueWrite.js";
+import {
+  CustomizationMode,
+  resolveEffectiveCustomization,
+  safeCustomizationDto,
+} from "../customization/customizationConfig.js";
 import { Category, CategoryStatus } from "../categories/category.model.js";
 import {
   Collection,
@@ -13,8 +18,16 @@ import {
 import { auditService } from "../system/audit.service.js";
 import { AuditAction, AuditTargetType } from "../system/auditLog.model.js";
 import { mediaService } from "../../services/media/media.service.js";
-import { Product, ProductMediaType, ProductStatus } from "./product.model.js";
+import {
+  Product,
+  ProductMediaType,
+  ProductStatus,
+  ProductVariantStatus,
+} from "./product.model.js";
 import { productSearchService } from "./productSearch.service.js";
+import { reviewSummariesForProductIds } from "../reviews/review.service.js";
+import { SizeGuideMode } from "../sizeGuides/sizeGuide.model.js";
+import { sizeGuideService } from "../sizeGuides/sizeGuide.service.js";
 
 const SORTS = {
   newest: { createdAt: -1, _id: -1 },
@@ -65,8 +78,15 @@ function sortedMedia(product, options) {
     .map((media) => mediaDto(media, options));
 }
 
+function activeVariants(variants = []) {
+  return variants.filter(
+    (variant) => variant.status !== ProductVariantStatus.RETIRED,
+  );
+}
+
 function stockSummary(variants = []) {
-  const totalStock = variants.reduce(
+  const sellableVariants = activeVariants(variants);
+  const totalStock = sellableVariants.reduce(
     (total, variant) => total + variant.stock,
     0,
   );
@@ -75,16 +95,16 @@ function stockSummary(variants = []) {
     totalStock,
     lowStock:
       totalStock > 0 &&
-      variants.some(
+      sellableVariants.some(
         (variant) =>
           variant.stock > 0 && variant.stock <= variant.lowStockThreshold,
       ),
   };
 }
 
-function publicSummary(product) {
+function publicSummary(product, reviewSummary) {
   const media = sortedMedia(product);
-  const variants = product.variants ?? [];
+  const variants = activeVariants(product.variants ?? []);
   return {
     id: product._id.toString(),
     slug: product.slug,
@@ -102,12 +122,13 @@ function publicSummary(product) {
     availability: stockSummary(variants),
     isNewArrival: product.isNewArrival,
     isBestseller: product.isBestseller,
+    ...(reviewSummary === undefined ? {} : { reviewSummary }),
   };
 }
 
-function publicDetail(product) {
+function publicDetail(product, reviewSummary, sizeGuide) {
   return {
-    ...publicSummary(product),
+    ...publicSummary(product, reviewSummary),
     description: product.description ?? null,
     collections: (product.collections ?? [])
       .map(relationSummary)
@@ -118,7 +139,7 @@ function publicDetail(product) {
     madeIn: product.madeIn ?? null,
     tags: product.tags ?? [],
     media: sortedMedia(product),
-    variants: (product.variants ?? []).map((variant) => ({
+    variants: activeVariants(product.variants ?? []).map((variant) => ({
       id: variant._id.toString(),
       sku: variant.sku,
       size: variant.size,
@@ -130,6 +151,10 @@ function publicDetail(product) {
       title: product.seo?.title ?? null,
       description: product.seo?.description ?? null,
     },
+    customization: safeCustomizationDto(
+      resolveEffectiveCustomization(product, product.category),
+    ),
+    ...(sizeGuide ? { sizeGuide } : {}),
   };
 }
 
@@ -151,7 +176,16 @@ function adminProduct(product) {
       colour: variant.colour,
       stock: variant.stock,
       lowStockThreshold: variant.lowStockThreshold,
+      status: variant.status ?? ProductVariantStatus.ACTIVE,
+      retiredAt: variant.retiredAt ?? null,
     })),
+    revision: value.__v ?? 0,
+    customizationMode: value.customizationMode ?? "INHERIT",
+    customizationOverride: value.customizationOverride ?? null,
+    sizeGuideMode: Object.values(SizeGuideMode).includes(value.sizeGuideMode)
+      ? value.sizeGuideMode
+      : SizeGuideMode.DISABLED,
+    sizeGuideOverrideId: idOf(value.sizeGuideOverride)?.toString?.() ?? null,
     status: value.status,
     exchangeEligible: value.exchangeEligible === true,
     merchandisingRank: value.merchandisingRank,
@@ -219,6 +253,9 @@ function persistenceFields(input) {
     "isBestseller",
     "exchangeEligible",
     "merchandisingRank",
+    "customizationMode",
+    "customizationOverride",
+    "sizeGuideMode",
     "seo",
   ]) {
     if (Object.hasOwn(input, field)) fields[field] = input[field];
@@ -226,6 +263,9 @@ function persistenceFields(input) {
   if (Object.hasOwn(input, "categoryId")) fields.category = input.categoryId;
   if (Object.hasOwn(input, "collectionIds")) {
     fields.collections = input.collectionIds;
+  }
+  if (Object.hasOwn(input, "sizeGuideOverrideId")) {
+    fields.sizeGuideOverride = input.sizeGuideOverrideId ?? undefined;
   }
   if (Object.hasOwn(input, "basePriceRupees")) {
     fields.basePricePaise = input.basePriceRupees;
@@ -236,61 +276,95 @@ function persistenceFields(input) {
   return fields;
 }
 
+/**
+ * Creates one canonical DRAFT product inside an already-selected catalogue
+ * write context. Callers own the outer catalogue guard/transaction.
+ */
+export async function createDraftProduct(input, { session = null } = {}) {
+  await ensureRelations(input.categoryId, input.collectionIds, { session });
+  if (input.sizeGuideMode === SizeGuideMode.OVERRIDE) {
+    if (!input.sizeGuideOverrideId) {
+      throw AppError.validation({
+        sizeGuideOverrideId: "Choose a size guide for OVERRIDE mode.",
+      });
+    }
+    await sizeGuideService.assertExists(input.sizeGuideOverrideId, {
+      session,
+      field: "sizeGuideOverrideId",
+    });
+  }
+  await mediaService.assertProductMedia(input.media, { session });
+  const product = new Product({
+    ...persistenceFields(input),
+    status: ProductStatus.DRAFT,
+  });
+  await product.save(saveOptions(session));
+  return product;
+}
+
 function preserveVariantIds(product, variants) {
   const existingById = new Map(
     product.variants.map((variant) => [variant._id.toString(), variant]),
   );
-  const existingBySku = new Map(
-    product.variants.map((variant) => [variant.sku.toUpperCase(), variant]),
+  const existingSkus = new Set(
+    product.variants.map((variant) => variant.sku.toUpperCase()),
   );
-  return variants.map((variant) => {
+  const retainedIds = new Set();
+  const now = new Date();
+  const nextVariants = variants.map((variant) => {
     const { id, ...fields } = variant;
-    if (id) {
-      const existing = existingById.get(id);
-      if (!existing) {
-        throw new AppError(ErrorCode.VALIDATION_ERROR, {
-          message: "One or more variants do not belong to this product.",
+    if (!id) {
+      if (existingSkus.has(fields.sku.toUpperCase())) {
+        throw AppError.validation({
+          variants:
+            "Include the existing variant ID when editing an existing SKU.",
         });
       }
-      return { ...fields, _id: existing._id };
-    }
-    const existing = existingBySku.get(fields.sku.toUpperCase());
-    return existing ? { ...fields, _id: existing._id } : fields;
-  });
-}
-
-function stockByVariant(variants = []) {
-  return new Map(
-    variants.map((variant) => [
-      variant._id.toString(),
-      { sku: variant.sku, stock: Number(variant.stock) },
-    ]),
-  );
-}
-
-function stockChanges(before, after) {
-  const variantIds = new Set([...before.keys(), ...after.keys()]);
-  return [...variantIds]
-    .sort()
-    .map((variantId) => {
-      const previous = before.get(variantId);
-      const current = after.get(variantId);
-      const oldStock = previous?.stock ?? 0;
-      const newStock = current?.stock ?? 0;
+      if (fields.status === ProductVariantStatus.RETIRED) {
+        throw AppError.validation({
+          variants: "A new variant must be active when it is created.",
+        });
+      }
       return {
-        variantId,
-        sku: current?.sku ?? previous?.sku,
-        oldStock,
-        newStock,
-        delta: newStock - oldStock,
+        ...fields,
+        status: ProductVariantStatus.ACTIVE,
+        stock: 0,
       };
-    })
-    .filter((change) => change.delta !== 0);
+    }
+
+    const existing = existingById.get(id);
+    if (!existing) {
+      throw new AppError(ErrorCode.VALIDATION_ERROR, {
+        message: "One or more variants do not belong to this product.",
+      });
+    }
+    retainedIds.add(id);
+    const status =
+      fields.status ?? existing.status ?? ProductVariantStatus.ACTIVE;
+    return {
+      ...fields,
+      _id: existing._id,
+      stock: existing.stock,
+      status,
+      retiredAt:
+        status === ProductVariantStatus.RETIRED
+          ? (existing.retiredAt ?? now)
+          : undefined,
+    };
+  });
+
+  if (retainedIds.size !== existingById.size) {
+    throw AppError.validation({
+      variants:
+        "Existing variants cannot be removed. Keep them in the list and retire variants that are no longer sellable.",
+    });
+  }
+  return nextVariants;
 }
 
 function populateProduct(query) {
   return query
-    .populate("category", "name slug")
+    .populate("category", "name slug customization sizeGuide __v")
     .populate("collections", "name slug");
 }
 
@@ -501,7 +575,18 @@ function recommendationScoreExpression(source) {
               $setIntersection: [
                 {
                   $map: {
-                    input: "$variants",
+                    input: {
+                      $filter: {
+                        input: "$variants",
+                        as: "candidate",
+                        cond: {
+                          $ne: [
+                            "$candidate.status",
+                            ProductVariantStatus.RETIRED,
+                          ],
+                        },
+                      },
+                    },
                     as: "variant",
                     in: "$$variant.colour",
                   },
@@ -689,7 +774,7 @@ async function listRelated(slug, limit = 4) {
     status: ProductStatus.PUBLISHED,
     ...publicConstraint,
   })
-    .populate("category", "name slug")
+    .populate("category", "name slug customization sizeGuide __v")
     .lean();
   const candidatesById = new Map(
     candidates.map((candidate) => [candidate._id.toString(), candidate]),
@@ -719,7 +804,7 @@ export const productService = {
       status: ProductStatus.PUBLISHED,
       ...(await publicRelationConstraint()),
     })
-      .populate("category", "name slug")
+      .populate("category", "name slug customization sizeGuide __v")
       .lean();
     const productsById = new Map(
       products.map((product) => [product._id.toString(), product]),
@@ -730,7 +815,9 @@ export const productService = {
       if (!productDocument) return { ...item, product: null, variant: null };
 
       const variantDocument = (productDocument.variants ?? []).find(
-        (variant) => variant._id.toString() === item.variantId.toString(),
+        (variant) =>
+          variant._id.toString() === item.variantId.toString() &&
+          variant.status !== ProductVariantStatus.RETIRED,
       );
       const variant = variantDocument
         ? {
@@ -769,7 +856,7 @@ export const productService = {
       status: ProductStatus.PUBLISHED,
       ...(await publicRelationConstraint()),
     })
-      .populate("category", "name slug")
+      .populate("category", "name slug customization sizeGuide __v")
       .lean();
     const productsById = new Map(
       products.map((product) => [product._id.toString(), product]),
@@ -807,7 +894,18 @@ export const productService = {
                   $setUnion: [
                     {
                       $map: {
-                        input: "$variants",
+                        input: {
+                          $filter: {
+                            input: "$variants",
+                            as: "candidate",
+                            cond: {
+                              $ne: [
+                                "$candidate.status",
+                                ProductVariantStatus.RETIRED,
+                              ],
+                            },
+                          },
+                        },
                         as: "variant",
                         in: "$$variant.size",
                       },
@@ -827,7 +925,18 @@ export const productService = {
                   $setUnion: [
                     {
                       $map: {
-                        input: "$variants",
+                        input: {
+                          $filter: {
+                            input: "$variants",
+                            as: "candidate",
+                            cond: {
+                              $ne: [
+                                "$candidate.status",
+                                ProductVariantStatus.RETIRED,
+                              ],
+                            },
+                          },
+                        },
                         as: "variant",
                         in: "$$variant.colour",
                       },
@@ -862,7 +971,18 @@ export const productService = {
                   $anyElementTrue: [
                     {
                       $map: {
-                        input: "$variants",
+                        input: {
+                          $filter: {
+                            input: "$variants",
+                            as: "candidate",
+                            cond: {
+                              $ne: [
+                                "$candidate.status",
+                                ProductVariantStatus.RETIRED,
+                              ],
+                            },
+                          },
+                        },
                         as: "variant",
                         in: { $gt: ["$$variant.stock", 0] },
                       },
@@ -986,9 +1106,17 @@ export const productService = {
       variantFilter.stock = 0;
     }
     if (Object.keys(variantFilter).length > 0) {
+      variantFilter.status = { $ne: ProductVariantStatus.RETIRED };
       query.variants = { $elemMatch: variantFilter };
     } else if (effectiveFilters.availability === "out-of-stock") {
-      query.variants = { $not: { $elemMatch: { stock: { $gt: 0 } } } };
+      query.variants = {
+        $not: {
+          $elemMatch: {
+            status: { $ne: ProductVariantStatus.RETIRED },
+            stock: { $gt: 0 },
+          },
+        },
+      };
     }
 
     const [products, total] = await Promise.all([
@@ -996,12 +1124,24 @@ export const productService = {
         .sort(SORTS[effectiveFilters.sort])
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
-        .populate("category", "name slug")
+        .populate("category", "name slug customization sizeGuide __v")
         .lean(),
       Product.countDocuments(query),
     ]);
+    const reviewSummaries = await reviewSummariesForProductIds(
+      products.map((product) => product._id),
+    );
     return {
-      products: products.map(publicSummary),
+      products: products.map((product) =>
+        publicSummary(
+          product,
+          reviewSummaries.get(product._id.toString()) ?? {
+            averageRating: null,
+            reviewCount: 0,
+            distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+          },
+        ),
+      ),
       total,
       page: safePage,
       limit: safeLimit,
@@ -1016,11 +1156,23 @@ export const productService = {
       status: ProductStatus.PUBLISHED,
       ...(await publicRelationConstraint()),
     })
-      .populate("category", "name slug")
+      .populate("category", "name slug customization sizeGuide __v")
       .populate("collections", "name slug")
       .lean();
     if (!product) throw AppError.notFound("Product");
-    return publicDetail(product);
+    const [summaries, sizeGuide] = await Promise.all([
+      reviewSummariesForProductIds([product._id]),
+      sizeGuideService.resolveForProduct(product),
+    ]);
+    return publicDetail(
+      product,
+      summaries.get(product._id.toString()) ?? {
+        averageRating: null,
+        reviewCount: 0,
+        distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      },
+      sizeGuide,
+    );
   },
 
   async listAdmin({
@@ -1064,10 +1216,7 @@ export const productService = {
   async create(input, actor, req) {
     let productId;
     await withCatalogueWrite(async (session) => {
-      await ensureRelations(input.categoryId, input.collectionIds, { session });
-      await mediaService.assertProductMedia(input.media, { session });
-      const product = new Product(persistenceFields(input));
-      await product.save(saveOptions(session));
+      const product = await createDraftProduct(input, { session });
       productId = product._id;
     });
     const product = await populatedProduct(productId);
@@ -1084,11 +1233,16 @@ export const productService = {
 
   async update(id, input, actor, req) {
     let changedFields = [];
-    let inventoryChanges = [];
     let productId;
     await withCatalogueWrite(async (session) => {
       const product = await inSession(Product.findById(id), session);
       if (!product) throw AppError.notFound("Product");
+      if (product.__v !== input.expectedRevision) {
+        throw new AppError(ErrorCode.STOCK_CHANGED, {
+          message:
+            "This product changed after you loaded it. Reload and review the latest values.",
+        });
+      }
       if (product.status === ProductStatus.ARCHIVED) {
         throw new AppError(ErrorCode.VALIDATION_ERROR, {
           message: "Archived products cannot be changed.",
@@ -1107,22 +1261,69 @@ export const productService = {
       if (fields.variants) {
         fields.variants = preserveVariantIds(product, fields.variants);
       }
+      const nextCustomizationMode =
+        fields.customizationMode ??
+        product.customizationMode ??
+        CustomizationMode.INHERIT;
+      if (
+        nextCustomizationMode !== CustomizationMode.OVERRIDE &&
+        fields.customizationOverride !== undefined
+      ) {
+        throw AppError.validation({
+          customizationOverride:
+            "Customization overrides are accepted only in OVERRIDE mode.",
+        });
+      }
+      if (nextCustomizationMode === CustomizationMode.OVERRIDE) {
+        if (
+          fields.customizationOverride === undefined &&
+          !product.customizationOverride
+        ) {
+          throw AppError.validation({
+            customizationOverride: "Provide the whole customization override.",
+          });
+        }
+      } else if (product.customizationOverride) {
+        fields.customizationOverride = undefined;
+      }
+
+      const nextSizeGuideMode =
+        fields.sizeGuideMode ?? product.sizeGuideMode ?? SizeGuideMode.DISABLED;
+      if (nextSizeGuideMode === SizeGuideMode.OVERRIDE) {
+        const overrideId =
+          fields.sizeGuideOverride ?? product.sizeGuideOverride ?? null;
+        if (!overrideId) {
+          throw AppError.validation({
+            sizeGuideOverrideId: "Choose a size guide for OVERRIDE mode.",
+          });
+        }
+        await sizeGuideService.assertExists(overrideId, {
+          session,
+          field: "sizeGuideOverrideId",
+        });
+      } else {
+        if (input.sizeGuideOverrideId) {
+          throw AppError.validation({
+            sizeGuideOverrideId:
+              "A size-guide override is accepted only in OVERRIDE mode.",
+          });
+        }
+        fields.sizeGuideOverride = undefined;
+      }
+
       changedFields = Object.keys(fields);
-      const previousStock = stockByVariant(product.variants);
       product.set(fields);
       if (
         product.status === ProductStatus.PUBLISHED &&
-        product.variants.length === 0
+        activeVariants(product.variants).length === 0
       ) {
         throw new AppError(ErrorCode.VALIDATION_ERROR, {
-          message: "Published products need at least one sellable variant.",
+          message:
+            "Published products need at least one active sellable variant.",
         });
       }
+      product.increment();
       await product.save(saveOptions(session));
-      inventoryChanges = stockChanges(
-        previousStock,
-        stockByVariant(product.variants),
-      );
       productId = product._id;
     });
 
@@ -1145,21 +1346,6 @@ export const productService = {
         req,
       });
     }
-    if (inventoryChanges.length > 0) {
-      await auditService.record({
-        action: AuditAction.STOCK_ADJUSTED,
-        actor,
-        targetType: AuditTargetType.PRODUCT,
-        targetId: product._id,
-        targetLabel: product.name,
-        metadata: {
-          changes: inventoryChanges.slice(0, 50),
-          totalChanges: inventoryChanges.length,
-          truncated: inventoryChanges.length > 50,
-        },
-        req,
-      });
-    }
     await auditService.record({
       action: AuditAction.PRODUCT_UPDATED,
       actor,
@@ -1172,12 +1358,19 @@ export const productService = {
     return adminProduct(product);
   },
 
-  async setStatus(id, status, actor, req) {
+  async setStatus(id, input, actor, req) {
+    const { status, expectedRevision } = input;
     let changed = false;
     let productId;
     await withCatalogueWrite(async (session) => {
       const product = await inSession(Product.findById(id), session);
       if (!product) throw AppError.notFound("Product");
+      if (product.__v !== expectedRevision) {
+        throw new AppError(ErrorCode.STOCK_CHANGED, {
+          message:
+            "This product changed after you loaded it. Reload and review the latest values.",
+        });
+      }
       if (product.status === ProductStatus.ARCHIVED) {
         throw new AppError(ErrorCode.VALIDATION_ERROR, {
           message: "Archived products cannot be restored.",
@@ -1187,9 +1380,10 @@ export const productService = {
       if (product.status === status) return;
 
       if (status === ProductStatus.PUBLISHED) {
-        if (product.variants.length === 0) {
+        if (activeVariants(product.variants).length === 0) {
           throw new AppError(ErrorCode.VALIDATION_ERROR, {
-            message: "Add at least one sellable variant before publishing.",
+            message:
+              "Add at least one active sellable variant before publishing.",
           });
         }
         await ensureRelations(
@@ -1207,6 +1401,7 @@ export const productService = {
         product.archivedAt = undefined;
       }
       product.status = status;
+      product.increment();
       await product.save(saveOptions(session));
       changed = true;
     });

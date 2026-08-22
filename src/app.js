@@ -94,17 +94,34 @@ export function createApp() {
   app.use(httpLogger);
 
   const jsonLimit = `${env.JSON_BODY_LIMIT_KB}kb`;
+  const productCsvPreviewPath = `${env.API_PREFIX}/admin/products/imports/preview`;
+  const isProductCsvPreview = (req) =>
+    req.method === "POST" &&
+    req.originalUrl?.split("?", 1)[0] === productCsvPreviewPath;
+  const unlessProductCsvPreview = (middleware) => (req, res, next) => {
+    if (isProductCsvPreview(req)) {
+      next();
+      return;
+    }
+    middleware(req, res, next);
+  };
   app.use(
-    express.json({
-      limit: jsonLimit,
-      verify(req, _res, buffer) {
-        const path = req.originalUrl?.split("?", 1)[0];
-        if (path === `${env.API_PREFIX}/webhooks/payments/mock-prepaid`)
-          req.rawPaymentWebhookBody = Buffer.from(buffer);
-      },
-    }),
+    unlessProductCsvPreview(
+      express.json({
+        limit: jsonLimit,
+        verify(req, _res, buffer) {
+          const path = req.originalUrl?.split("?", 1)[0];
+          if (path === `${env.API_PREFIX}/webhooks/payments/mock-prepaid`)
+            req.rawPaymentWebhookBody = Buffer.from(buffer);
+        },
+      }),
+    ),
   );
-  app.use(express.urlencoded({ extended: false, limit: jsonLimit }));
+  app.use(
+    unlessProductCsvPreview(
+      express.urlencoded({ extended: false, limit: jsonLimit }),
+    ),
+  );
   app.use(cookieParser());
 
   app.use(sanitizeRequest);

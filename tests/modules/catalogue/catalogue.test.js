@@ -76,10 +76,21 @@ async function createCollection(admin, options = {}) {
 }
 
 async function setStatus(admin, resource, id, status) {
+  let expectedRevision;
+  if (resource === "products") {
+    const current = await request(app)
+      .get(`/api/admin/products/${id}`)
+      .set(bearer(admin.accessToken));
+    expect(current.status).toBe(200);
+    expectedRevision = current.body.data.revision;
+  }
   return request(app)
     .patch(`/api/admin/${resource}/${id}/status`)
     .set(bearer(admin.accessToken))
-    .send({ status });
+    .send({
+      status,
+      ...(resource === "products" ? { expectedRevision } : {}),
+    });
 }
 
 async function publishedTaxonomy(admin) {
@@ -203,6 +214,17 @@ async function createProduct(admin, input) {
     .post("/api/admin/products")
     .set(bearer(admin.accessToken))
     .send(input);
+}
+
+async function updateProduct(admin, id, input) {
+  const current = await request(app)
+    .get(`/api/admin/products/${id}`)
+    .set(bearer(admin.accessToken));
+  expect(current.status).toBe(200);
+  return request(app)
+    .patch(`/api/admin/products/${id}`)
+    .set(bearer(admin.accessToken))
+    .send({ ...input, expectedRevision: current.body.data.revision });
 }
 
 describe("catalogue administration boundary", () => {
@@ -607,10 +629,11 @@ describe("catalogue administration boundary", () => {
     expect(withoutVariant.status).toBe(422);
     expect(withoutVariant.body.error.message).toMatch(/variant/i);
 
-    const withVariant = await request(app)
-      .patch(`/api/admin/products/${created.body.data.id}`)
-      .set(bearer(admin.accessToken))
-      .send({ variants: productInput(category, collection).variants });
+    const [newVariant] = productInput(category, collection).variants;
+    const { stock: _initialStock, ...structuralVariant } = newVariant;
+    const withVariant = await updateProduct(admin, created.body.data.id, {
+      variants: [structuralVariant],
+    });
     expect(withVariant.status).toBe(200);
 
     const draftRelations = await setStatus(
@@ -637,18 +660,15 @@ describe("catalogue administration boundary", () => {
       (await setStatus(admin, "products", productId, "PUBLISHED")).status,
     ).toBe(200);
 
-    const draftCategoryEdit = await request(app)
-      .patch(`/api/admin/products/${productId}`)
-      .set(bearer(admin.accessToken))
-      .send({ categoryId: draftCategory.id });
-    const draftCollectionEdit = await request(app)
-      .patch(`/api/admin/products/${productId}`)
-      .set(bearer(admin.accessToken))
-      .send({ collectionIds: [draftCollection.id] });
-    const emptyVariants = await request(app)
-      .patch(`/api/admin/products/${productId}`)
-      .set(bearer(admin.accessToken))
-      .send({ variants: [] });
+    const draftCategoryEdit = await updateProduct(admin, productId, {
+      categoryId: draftCategory.id,
+    });
+    const draftCollectionEdit = await updateProduct(admin, productId, {
+      collectionIds: [draftCollection.id],
+    });
+    const emptyVariants = await updateProduct(admin, productId, {
+      variants: [],
+    });
     const categoryDraft = await setStatus(
       admin,
       "categories",
@@ -973,7 +993,7 @@ describe("catalogue administration boundary", () => {
     await expect(stored.validate()).rejects.toThrow(/size\/colour/i);
   });
 
-  it("updates/clears money, preserves variant IDs, and audits bounded stock deltas", async () => {
+  it("updates/clears money, preserves variant IDs and stock, and audits price changes", async () => {
     const admin = await adminAccount();
     const { category, collection } = await publishedTaxonomy(admin);
     const input = productInput(category, collection);
@@ -986,20 +1006,18 @@ describe("catalogue administration boundary", () => {
     const variants = [
       {
         id: variantId,
-        ...input.variants[0],
         sku: renamedSku,
-        stock: 7,
+        size: input.variants[0].size,
+        colour: input.variants[0].colour,
         lowStockThreshold: 5,
+        status: "ACTIVE",
       },
     ];
-    const updated = await request(app)
-      .patch(`/api/admin/products/${productId}`)
-      .set(bearer(admin.accessToken))
-      .send({
-        basePriceRupees: 1299.75,
-        compareAtPriceRupees: null,
-        variants,
-      });
+    const updated = await updateProduct(admin, productId, {
+      basePriceRupees: 1299.75,
+      compareAtPriceRupees: null,
+      variants,
+    });
     expect(updated.status, JSON.stringify(updated.body)).toBe(200);
     expect(updated.body.data).toMatchObject({
       pricePaise: 129975,
@@ -1008,28 +1026,19 @@ describe("catalogue administration boundary", () => {
         {
           id: variantId,
           sku: renamedSku,
-          stock: 7,
+          stock: 4,
           lowStockThreshold: 5,
+          status: "ACTIVE",
         },
       ],
     });
 
-    const stockAudit = await AuditLog.findOne({
-      action: AuditAction.STOCK_ADJUSTED,
-      targetId: productId,
-    }).lean();
-    expect(stockAudit.metadata).toMatchObject({
-      changes: [
-        {
-          sku: renamedSku,
-          oldStock: 4,
-          newStock: 7,
-          delta: 3,
-        },
-      ],
-      totalChanges: 1,
-      truncated: false,
-    });
+    expect(
+      await AuditLog.countDocuments({
+        action: AuditAction.STOCK_ADJUSTED,
+        targetId: productId,
+      }),
+    ).toBe(0);
     expect(
       await AuditLog.countDocuments({
         action: AuditAction.PRODUCT_PRICE_CHANGED,
@@ -1037,22 +1046,18 @@ describe("catalogue administration boundary", () => {
       }),
     ).toBe(1);
 
-    const noOp = await request(app)
-      .patch(`/api/admin/products/${productId}`)
-      .set(bearer(admin.accessToken))
-      .send({ variants });
+    const noOp = await updateProduct(admin, productId, { variants });
     expect(noOp.status).toBe(200);
     expect(
       await AuditLog.countDocuments({
         action: AuditAction.STOCK_ADJUSTED,
         targetId: productId,
       }),
-    ).toBe(1);
+    ).toBe(0);
 
-    const invalidPartialPrice = await request(app)
-      .patch(`/api/admin/products/${productId}`)
-      .set(bearer(admin.accessToken))
-      .send({ compareAtPriceRupees: 1000 });
+    const invalidPartialPrice = await updateProduct(admin, productId, {
+      compareAtPriceRupees: 1000,
+    });
     expect(invalidPartialPrice.status).toBe(422);
   });
 
@@ -1260,10 +1265,9 @@ describe("catalogue administration boundary", () => {
     expect(
       (await setStatus(admin, "products", productId, "ARCHIVED")).status,
     ).toBe(200);
-    const updateArchived = await request(app)
-      .patch(`/api/admin/products/${productId}`)
-      .set(bearer(admin.accessToken))
-      .send({ name: "Restored product" });
+    const updateArchived = await updateProduct(admin, productId, {
+      name: "Restored product",
+    });
     const restoreArchived = await setStatus(
       admin,
       "products",

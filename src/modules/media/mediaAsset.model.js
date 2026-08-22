@@ -26,6 +26,8 @@ export const MediaPurpose = {
   HOME_HERO: "HOME_HERO",
   COLLECTION: "COLLECTION",
   EXCHANGE_REQUEST: "EXCHANGE_REQUEST",
+  REVIEW: "REVIEW",
+  CUSTOM_REQUEST_REFERENCE: "CUSTOM_REQUEST_REFERENCE",
 };
 
 export const MediaPurposePrefix = {
@@ -33,6 +35,8 @@ export const MediaPurposePrefix = {
   [MediaPurpose.HOME_HERO]: "home",
   [MediaPurpose.COLLECTION]: "collections",
   [MediaPurpose.EXCHANGE_REQUEST]: "exchanges",
+  [MediaPurpose.REVIEW]: "reviews",
+  [MediaPurpose.CUSTOM_REQUEST_REFERENCE]: "custom-requests",
 };
 
 export const MediaDeletionReason = {
@@ -51,7 +55,7 @@ const mediaAssetSchema = createSchema(
     publicId: {
       ...shortText({ required: true, max: 255 }),
       match: [
-        /^(?:products|home|collections|exchanges)\/[a-f0-9-]{36}$/,
+        /^(?:products|home|collections|exchanges|reviews|custom-requests)\/[a-f0-9-]{36}$/,
         "Media must use a generated server-owned public ID.",
       ],
       validate: {

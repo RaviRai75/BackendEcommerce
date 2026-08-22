@@ -42,6 +42,10 @@ const SENSITIVE_KEYS = [
   "webhookSecret",
   "signature",
   "saltKey",
+  "smtpAppPassword",
+  "ciphertext",
+  "authTag",
+  "notificationEncryptionKey",
   // Payment instrument data, which we never store but must never log either
   "cardNumber",
   "cvv",

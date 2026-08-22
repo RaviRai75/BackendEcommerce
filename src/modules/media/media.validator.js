@@ -90,6 +90,12 @@ export const createExchangeUploadIntentSchema = strictObject({
     .max(500 * 1024 * 1024),
 });
 
+// Reviews and custom requests use the same configured image safety envelope;
+// each controller fixes its separate purpose server-side.
+export const createReviewUploadIntentSchema = createExchangeUploadIntentSchema;
+export const createCustomRequestUploadIntentSchema =
+  createExchangeUploadIntentSchema;
+
 export const completeUploadSchema = strictObject({
   assetId: objectIdSchema,
   version: z.coerce.number().int().positive(),

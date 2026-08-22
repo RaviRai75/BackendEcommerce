@@ -4,6 +4,7 @@ import {
   sendPaginated,
   sendSuccess,
 } from "../../utils/response.js";
+import { productInventoryService } from "./productInventory.service.js";
 import { productService } from "./product.service.js";
 
 export const listProductFacets = asyncHandler(async (_req, res) => {
@@ -61,9 +62,18 @@ export const updateProduct = asyncHandler(async (req, res) => {
 export const setProductStatus = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await productService.setStatus(
-      req.params.id,
-      req.body.status,
+    await productService.setStatus(req.params.id, req.body, req.user, req),
+  );
+});
+
+export const adjustProductStock = asyncHandler(async (req, res) => {
+  sendCreated(
+    res,
+    await productInventoryService.adjustStock(
+      req.params.productId,
+      req.params.variantId,
+      req.body,
+      req.idempotencyKey,
       req.user,
       req,
     ),

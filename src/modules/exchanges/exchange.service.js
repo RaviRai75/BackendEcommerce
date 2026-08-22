@@ -4,6 +4,11 @@ import { mediaService } from "../../services/media/media.service.js";
 import { AppError } from "../../utils/AppError.js";
 import { ErrorCode } from "../../utils/errorCodes.js";
 import { withCatalogueWrite } from "../catalogue/catalogueWrite.js";
+import { notificationService } from "../notifications/notification.service.js";
+import {
+  NotificationTargetKind,
+  NotificationType,
+} from "../notifications/notification.model.js";
 import {
   MediaAsset,
   MediaAssetStatus,
@@ -14,7 +19,7 @@ import {
   Order,
   OrderFulfillmentStatus,
 } from "../orders/order.model.js";
-import { Product } from "../products/product.model.js";
+import { Product, ProductVariantStatus } from "../products/product.model.js";
 import { auditService } from "../system/audit.service.js";
 import { AuditAction, AuditTargetType } from "../system/auditLog.model.js";
 import {
@@ -149,6 +154,7 @@ function sizesFor(line, productsById) {
       (product.variants ?? [])
         .filter(
           (variant) =>
+            variant.status !== ProductVariantStatus.RETIRED &&
             String(variant.colour).toLowerCase() ===
               String(line.colour).toLowerCase() &&
             String(variant.size).toUpperCase() !==
@@ -249,6 +255,47 @@ async function auditRequested(exchange, actor, req) {
   });
 }
 
+async function publishExchangeRequestedNotifications(
+  exchange,
+  order,
+  occurredAt,
+  session,
+) {
+  const versionAndStatus = `v:0:${ExchangeStatus.REQUESTED}`;
+  await notificationService.publish(
+    {
+      eventKey: `exchange:${exchange._id}:${versionAndStatus}:${NotificationType.EXCHANGE_REQUESTED}`,
+      type: NotificationType.EXCHANGE_REQUESTED,
+      occurredAt,
+      payload: {},
+      customer: {
+        userId: exchange.user,
+        email: order.shippingAddress.email,
+        name: order.shippingAddress.recipientName,
+      },
+      customerTarget: {
+        kind: NotificationTargetKind.EXCHANGE,
+        reference: exchange.exchangeNumber,
+      },
+    },
+    { session },
+  );
+  await notificationService.publish(
+    {
+      eventKey: `exchange:${exchange._id}:${versionAndStatus}:${NotificationType.ADMIN_NEW_EXCHANGE}`,
+      type: NotificationType.ADMIN_NEW_EXCHANGE,
+      occurredAt,
+      payload: {},
+      notifyAdmins: true,
+      adminTarget: {
+        kind: NotificationTargetKind.EXCHANGE,
+        reference: exchange.exchangeNumber,
+      },
+    },
+    { session },
+  );
+}
+
 const LIST_FIELDS = [
   "exchangeNumber",
   "orderNumber",
@@ -271,6 +318,19 @@ const DETAIL_FIELDS = [
   "photos.publicId",
   "history.status",
   "history.at",
+  "history.publicMessage",
+  "fee.amountPaise",
+  "fee.currency",
+  "reverseShipment.courier",
+  "reverseShipment.awb",
+  "reverseShipment.trackingId",
+  "reverseShipment.trackingStatus",
+  "replacementShipment.courier",
+  "replacementShipment.awb",
+  "replacementShipment.trackingId",
+  "replacementShipment.trackingStatus",
+  "qc.result",
+  "qc.recordedAt",
 ].join(" ");
 
 export const exchangeService = {
@@ -350,7 +410,9 @@ export const exchangeService = {
             orderNumber: input.orderNumber,
           })
             .session(session)
-            .select("orderNumber fulfillmentStatus deliveredAt items")
+            .select(
+              "orderNumber fulfillmentStatus deliveredAt shippingAddress.email shippingAddress.recipientName items",
+            )
             .lean();
           if (!order) throw new AppError(ErrorCode.ORDER_NOT_FOUND);
           const line = (order.items ?? []).find(
@@ -407,6 +469,7 @@ export const exchangeService = {
             .lean();
           const replacement = product?.variants?.find(
             (variant) =>
+              variant.status !== ProductVariantStatus.RETIRED &&
               String(variant.colour).toLowerCase() ===
                 String(line.colour).toLowerCase() &&
               String(variant.size).toUpperCase() === input.requestedSize &&
@@ -465,6 +528,12 @@ export const exchangeService = {
               },
             ],
             { session },
+          );
+          await publishExchangeRequestedNotifications(
+            exchange,
+            order,
+            decisionTime,
+            session,
           );
           return { exchange };
         },

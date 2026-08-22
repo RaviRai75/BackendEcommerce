@@ -121,6 +121,14 @@ export const couponLimiter = createRateLimiter({
   keyGenerator: byUserOrIp,
 });
 
+/** Stable referral-code issuance. Applied only after authentication. */
+export const referralCodeLimiter = createRateLimiter({
+  name: "referral-code",
+  windowMs: 60 * MINUTE,
+  limit: 6,
+  keyGenerator: byUserOrIp,
+});
+
 /** Review submission. */
 export const reviewLimiter = createRateLimiter({
   name: "review",
@@ -129,11 +137,27 @@ export const reviewLimiter = createRateLimiter({
   keyGenerator: byUserOrIp,
 });
 
-/** Contact form, support tickets and other unauthenticated writes. */
+/** Contact form and other unauthenticated writes. */
 export const contactLimiter = createRateLimiter({
   name: "contact",
   windowMs: 60 * MINUTE,
   limit: 6,
+  keyGenerator: byUserOrIp,
+});
+
+/** Authenticated support-ticket creation. Applied only after requireAuth. */
+export const supportCreateLimiter = createRateLimiter({
+  name: "support-create",
+  windowMs: 60 * MINUTE,
+  limit: 6,
+  keyGenerator: byUserOrIp,
+});
+
+/** Authenticated customer/admin support message writes. */
+export const supportMessageLimiter = createRateLimiter({
+  name: "support-message",
+  windowMs: 10 * MINUTE,
+  limit: 30,
   keyGenerator: byUserOrIp,
 });
 
@@ -164,6 +188,20 @@ export const exchangeLimiter = createRateLimiter({
 /** Order quote — read-only but performs catalogue, coupon and delivery composition. */
 export const quoteLimiter = createRateLimiter({
   name: "order-quote",
+  windowMs: 10 * MINUTE,
+  limit: 30,
+  keyGenerator: byUserOrIp,
+});
+
+export const customizationLimiter = createRateLimiter({
+  name: "customization",
+  windowMs: 10 * MINUTE,
+  limit: 20,
+  keyGenerator: byUserOrIp,
+});
+
+export const customizationMessageLimiter = createRateLimiter({
+  name: "customization-message",
   windowMs: 10 * MINUTE,
   limit: 30,
   keyGenerator: byUserOrIp,

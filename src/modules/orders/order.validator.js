@@ -5,9 +5,15 @@ import {
   personNameSchema,
   phoneSchema,
   pincodeSchema,
+  searchTermSchema,
   strictObject,
 } from "../../validators/common.js";
-import { OrderPaymentMethod } from "./order.model.js";
+import {
+  OrderFulfillmentAction,
+  OrderFulfillmentStatus,
+  OrderPaymentMethod,
+  OrderPaymentStatus,
+} from "./order.model.js";
 
 const boundedLine = (max) => z.string().trim().min(1).max(max);
 const couponCodeSchema = z
@@ -74,3 +80,61 @@ export const orderNumberParamSchema = strictObject({
     .max(48)
     .regex(/^[A-Za-z0-9_-]+$/, "Not a valid order number."),
 });
+
+const expectedVersionSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(Number.MAX_SAFE_INTEGER);
+const shipmentFields = {
+  courier: z.string().trim().min(1).max(100),
+  awb: z.string().trim().min(1).max(200),
+  trackingId: z.string().trim().min(1).max(200),
+  shipmentId: z.string().trim().min(1).max(200),
+};
+
+export const adminOrderListQuerySchema = paginationSchema
+  .extend({
+    q: searchTermSchema
+      .refine((value) => value.length > 0, {
+        message: "Search cannot be empty.",
+      })
+      .optional(),
+    status: z.enum(Object.values(OrderFulfillmentStatus)).optional(),
+    paymentStatus: z.enum(Object.values(OrderPaymentStatus)).optional(),
+  })
+  .strict();
+
+const adminActionSchemas = [
+  strictObject({
+    action: z.literal(OrderFulfillmentAction.START_PROCESSING),
+    expectedVersion: expectedVersionSchema,
+  }),
+  strictObject({
+    action: z.literal(OrderFulfillmentAction.MARK_PACKED),
+    expectedVersion: expectedVersionSchema,
+  }),
+  strictObject({
+    action: z.literal(OrderFulfillmentAction.RECORD_SHIPMENT),
+    expectedVersion: expectedVersionSchema,
+    ...shipmentFields,
+  }),
+  strictObject({
+    action: z.literal(OrderFulfillmentAction.MARK_OUT_FOR_DELIVERY),
+    expectedVersion: expectedVersionSchema,
+  }),
+  strictObject({
+    action: z.literal(OrderFulfillmentAction.MARK_DELIVERED),
+    expectedVersion: expectedVersionSchema,
+  }),
+  strictObject({
+    action: z.literal(OrderFulfillmentAction.CANCEL),
+    expectedVersion: expectedVersionSchema,
+    reason: z.string().trim().min(1).max(160),
+  }),
+];
+
+export const adminOrderActionSchema = z.discriminatedUnion(
+  "action",
+  adminActionSchemas,
+);

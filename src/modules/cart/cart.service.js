@@ -4,6 +4,7 @@ import { AppError } from "../../utils/AppError.js";
 import { ErrorCode, ErrorMessage } from "../../utils/errorCodes.js";
 import { productService } from "../products/product.service.js";
 import { wishlistService } from "../wishlist/wishlist.service.js";
+import { abandonedCartEventService } from "./abandonedCartEvent.service.js";
 import { Cart, CART_MAX_LINES } from "./cart.model.js";
 
 export const CartLineStatus = {
@@ -147,6 +148,17 @@ async function cartDto(items) {
 // callers may project a coupon result but cannot inject prices into it.
 export { cartDto as composeCartDto };
 
+async function cartDtoAfterMutation(userId, persistedCart) {
+  const cart = await cartDto(persistedCart.lines.map(inputLine));
+  await abandonedCartEventService.recordCartActivity({
+    ownerId: userId,
+    cartRevision: persistedCart.activityRevision,
+    cart,
+    activityAt: persistedCart.updatedAt,
+  });
+  return cart;
+}
+
 async function requireAvailable(item) {
   const [entry] = await productService.hydrateCartLines([item]);
   if (!entry.product) throw new AppError(ErrorCode.PRODUCT_UNAVAILABLE);
@@ -198,25 +210,31 @@ async function setPersistedLine(userId, item, { session = null } = {}) {
               { $concatArrays: [[line], "$lines"] },
             ],
           },
+          activityRevision: {
+            $add: [{ $ifNull: ["$activityRevision", 0] }, 1],
+          },
         },
       },
     ],
     { new: true, session },
-  ).select("lines");
+  ).select("lines activityRevision updatedAt");
   const cart = await query.lean();
   if (!cart) throw cartLimitError();
-  return cart.lines;
+  return cart;
 }
 
 async function removePersistedLine(userId, variantId, { session = null } = {}) {
   const cart = await Cart.findOneAndUpdate(
     { user: userId },
-    { $pull: { lines: { variant: asObjectId(variantId) } } },
+    {
+      $pull: { lines: { variant: asObjectId(variantId) } },
+      $inc: { activityRevision: 1 },
+    },
     { new: true, runValidators: true, session },
   )
-    .select("lines")
+    .select("lines activityRevision updatedAt")
     .lean();
-  return cart?.lines ?? [];
+  return cart;
 }
 
 export const cartService = {
@@ -232,13 +250,13 @@ export const cartService = {
   async set(userId, item) {
     await requireAvailable(item);
     await ensureCart(userId);
-    const lines = await setPersistedLine(userId, item);
-    return cartDto(lines.map(inputLine));
+    const cart = await setPersistedLine(userId, item);
+    return cartDtoAfterMutation(userId, cart);
   },
 
   async remove(userId, variantId) {
-    const lines = await removePersistedLine(userId, variantId);
-    return cartDto(lines.map(inputLine));
+    const cart = await removePersistedLine(userId, variantId);
+    return cart ? cartDtoAfterMutation(userId, cart) : cartDto([]);
   },
 
   async merge(userId, items) {
@@ -287,15 +305,18 @@ export const cartService = {
                 },
               ],
             },
+            activityRevision: {
+              $add: [{ $ifNull: ["$activityRevision", 0] }, 1],
+            },
           },
         },
       ],
       { new: true },
     )
-      .select("lines")
+      .select("lines activityRevision updatedAt")
       .lean();
     if (!cart) throw cartLimitError();
-    return cartDto(cart.lines.map(inputLine));
+    return cartDtoAfterMutation(userId, cart);
   },
 
   async moveFromWishlist(userId, item) {
@@ -304,12 +325,12 @@ export const cartService = {
     // aborting a concurrent first move. It contains no commercial snapshot.
     await ensureCart(userId);
 
-    let lines;
+    let persistedCart;
     if (await supportsTransactions()) {
       const session = await mongoose.startSession();
       try {
         await session.withTransaction(async () => {
-          lines = await setPersistedLine(userId, item, { session });
+          persistedCart = await setPersistedLine(userId, item, { session });
           // Deliberately second: wishlist identity is never removed unless the
           // cart mutation has succeeded in the same transaction.
           await wishlistService.removeProductIdentity(userId, item.productId, {
@@ -323,12 +344,12 @@ export const cartService = {
       // Safe fallback: a failure after the cart write leaves a harmless
       // duplicate across domains. Replaying the operation is idempotent and
       // removes the wishlist identity; the inverse data-loss state is avoided.
-      lines = await setPersistedLine(userId, item);
+      persistedCart = await setPersistedLine(userId, item);
       await wishlistService.removeProductIdentity(userId, item.productId);
     }
 
     const [cart, wishlist] = await Promise.all([
-      cartDto(lines.map(inputLine)),
+      cartDtoAfterMutation(userId, persistedCart),
       wishlistService.get(userId),
     ]);
     return { cart, wishlist };

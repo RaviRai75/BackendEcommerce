@@ -9,10 +9,20 @@ import {
   strictObject,
 } from "../../validators/common.js";
 import {
+  CustomizationMode,
+  customizationDefinitionValidator,
+} from "../customization/customizationConfig.js";
+import {
   cloudinaryMediaError,
   parseCloudinaryDeliveryUrl,
 } from "./cloudinaryMedia.js";
-import { ProductMediaType, ProductStatus } from "./product.model.js";
+import { SizeGuideMode } from "../sizeGuides/sizeGuide.model.js";
+import { AdminInventoryReason } from "./adminInventoryTransaction.model.js";
+import {
+  ProductMediaType,
+  ProductStatus,
+  ProductVariantStatus,
+} from "./product.model.js";
 
 const compactText = (max) => z.string().trim().min(1).max(max);
 const optionalText = (max) => z.string().trim().max(max).optional();
@@ -62,8 +72,13 @@ const variantShape = {
 const variantSchema = strictObject(variantShape);
 const updateVariantSchema = strictObject({
   id: objectIdSchema.optional(),
-  ...variantShape,
+  sku: variantShape.sku,
+  size: variantShape.size,
+  colour: variantShape.colour,
+  lowStockThreshold: z.coerce.number().int().min(0).max(1_000_000).default(3),
+  status: z.enum(Object.values(ProductVariantStatus)).optional(),
 });
+const productRevisionSchema = z.coerce.number().int().min(0);
 
 function variantsAreUnique(variants) {
   const ids = variants.map((variant) => variant.id).filter(Boolean);
@@ -145,10 +160,61 @@ const productShape = {
   isBestseller: z.boolean().optional(),
   exchangeEligible: z.boolean().optional(),
   merchandisingRank: z.coerce.number().int().min(0).max(1_000_000).optional(),
+  customizationMode: z
+    .enum(Object.values(CustomizationMode))
+    .default(CustomizationMode.INHERIT),
+  customizationOverride: customizationDefinitionValidator.optional(),
+  sizeGuideMode: z
+    .enum(Object.values(SizeGuideMode))
+    .default(SizeGuideMode.DISABLED),
+  sizeGuideOverrideId: objectIdSchema.nullable().optional(),
   seo: seoSchema,
 };
 
 function validatePrices(value, ctx) {
+  if (
+    value.customizationMode === CustomizationMode.OVERRIDE &&
+    !value.customizationOverride
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["customizationOverride"],
+      message: "Provide the whole customization override.",
+    });
+  }
+  if (
+    value.customizationMode &&
+    value.customizationMode !== CustomizationMode.OVERRIDE &&
+    value.customizationOverride !== undefined
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["customizationOverride"],
+      message: "Customization overrides are accepted only in OVERRIDE mode.",
+    });
+  }
+  if (
+    value.sizeGuideMode === SizeGuideMode.OVERRIDE &&
+    !value.sizeGuideOverrideId
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sizeGuideOverrideId"],
+      message: "Choose a size guide for OVERRIDE mode.",
+    });
+  }
+  if (
+    value.sizeGuideMode &&
+    value.sizeGuideMode !== SizeGuideMode.OVERRIDE &&
+    value.sizeGuideOverrideId !== undefined &&
+    value.sizeGuideOverrideId !== null
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sizeGuideOverrideId"],
+      message: "A size-guide override is accepted only in OVERRIDE mode.",
+    });
+  }
   if (
     value.compareAtPriceRupees !== null &&
     value.compareAtPriceRupees !== undefined &&
@@ -170,15 +236,46 @@ const updateShape = Object.fromEntries(
   Object.entries(productShape).map(([key, schema]) => [key, schema.optional()]),
 );
 updateShape.variants = variantListSchema(updateVariantSchema).optional();
-export const updateProductSchema = strictObject(updateShape)
-  .refine((value) => Object.keys(value).length > 0, {
-    message: "Provide at least one field to update.",
-  })
+export const updateProductSchema = strictObject({
+  ...updateShape,
+  expectedRevision: productRevisionSchema,
+})
+  .refine(
+    (value) => Object.keys(value).some((key) => key !== "expectedRevision"),
+    {
+      message: "Provide at least one field to update.",
+    },
+  )
   .superRefine(validatePrices);
 
 export const productStatusSchema = strictObject({
   status: z.enum(Object.values(ProductStatus)),
+  expectedRevision: productRevisionSchema,
 });
+
+export const stockAdjustmentSchema = strictObject({
+  delta: z.coerce
+    .number()
+    .int()
+    .min(-1_000_000)
+    .max(1_000_000)
+    .refine((value) => value !== 0, "Inventory delta must not be zero."),
+  expectedProductRevision: productRevisionSchema,
+  expectedStock: z.coerce.number().int().min(0).max(1_000_000),
+  reason: z.enum(Object.values(AdminInventoryReason)),
+  note: optionalText(240),
+});
+
+export const stockAdjustmentParamsSchema = strictObject({
+  productId: objectIdSchema,
+  variantId: objectIdSchema,
+});
+
+export const stockAdjustmentIdempotencyKeySchema = z
+  .string()
+  .min(32)
+  .max(200)
+  .regex(/^[\x21-\x7E]+$/);
 
 export const productListQuerySchema = paginationSchema
   .extend({

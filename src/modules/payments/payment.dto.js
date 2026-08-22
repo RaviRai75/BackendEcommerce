@@ -1,6 +1,10 @@
 export function paymentInitiationDto(payment, action) {
   return {
-    orderId: String(payment.order),
+    ...(payment.order ? { orderId: String(payment.order) } : {}),
+    ...(payment.customOrder
+      ? { customOrderId: String(payment.customOrder) }
+      : {}),
+    payableType: payment.payableType ?? "ORDER",
     attemptId: String(payment._id),
     paymentStatus: payment.status,
     action: action
@@ -19,7 +23,11 @@ export function paymentInitiationDto(payment, action) {
 
 export function paymentResultDto(payment) {
   return {
-    orderId: String(payment.order),
+    ...(payment.order ? { orderId: String(payment.order) } : {}),
+    ...(payment.customOrder
+      ? { customOrderId: String(payment.customOrder) }
+      : {}),
+    payableType: payment.payableType ?? "ORDER",
     attemptId: String(payment._id),
     paymentStatus: payment.status,
     confirmedAt: payment.confirmedAt ?? null,

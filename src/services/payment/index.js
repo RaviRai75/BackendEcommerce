@@ -4,6 +4,18 @@ import { env, isProduction } from "../../config/env.js";
 import { supportsTransactions } from "../../config/database.js";
 import { AppError } from "../../utils/AppError.js";
 import { ErrorCode } from "../../utils/errorCodes.js";
+import {
+  CustomOrder,
+  CustomOrderPaymentStatus,
+  CustomProductionStatus,
+  CustomFulfillmentStatus,
+  CustomCompletionStatus,
+} from "../../modules/customization/customOrder.model.js";
+import {
+  CustomRequest,
+  CustomRequestAction,
+  CustomRequestStatus,
+} from "../../modules/customization/customRequest.model.js";
 import { auditService } from "../../modules/system/audit.service.js";
 import {
   AuditAction,
@@ -16,10 +28,16 @@ import {
   OrderPaymentStatus,
   OrderPlacementStatus,
 } from "../../modules/orders/order.model.js";
+import { notificationService } from "../../modules/notifications/notification.service.js";
+import {
+  NotificationTargetKind,
+  NotificationType,
+} from "../../modules/notifications/notification.model.js";
 import {
   Payment,
   PaymentAttemptStatus,
   PaymentCurrency,
+  PaymentPayableType,
   PaymentProvider,
 } from "../../modules/payments/payment.model.js";
 import {
@@ -34,7 +52,10 @@ import {
 import { mockPrepaidAdapter } from "./adapters/mockPrepaid.adapter.js";
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
+const MAX_COMMIT_ATTEMPTS = 5;
+const MAX_RECONCILIATION_ATTEMPTS = 3;
 const REFUND_DISPATCH_LEASE_MS = 30_000;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const sha256 = (value) =>
   crypto.createHash("sha256").update(value).digest("hex");
 
@@ -58,30 +79,75 @@ function verificationFailed() {
   return new AppError(ErrorCode.PAYMENT_VERIFICATION_FAILED);
 }
 
-function retryableTransactionError(error) {
+function hasErrorLabel(error, label) {
   return (
-    Boolean(error?.hasErrorLabel?.("TransientTransactionError")) ||
-    error?.code === 112
+    Boolean(error?.hasErrorLabel?.(label)) ||
+    error?.errorLabels?.includes?.(label) === true
   );
 }
 
-async function runTransaction(work) {
+function retryableTransactionError(error) {
+  return (
+    hasErrorLabel(error, "TransientTransactionError") || error?.code === 112
+  );
+}
+
+async function reconcileAmbiguousCommit(reconcile) {
+  if (!reconcile) return false;
+  for (let attempt = 1; attempt <= MAX_RECONCILIATION_ATTEMPTS; attempt += 1) {
+    if (await reconcile()) return true;
+    if (attempt < MAX_RECONCILIATION_ATTEMPTS) await wait(25 * attempt);
+  }
+  return false;
+}
+
+async function runTransaction(work, { reconcile } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= MAX_TRANSACTION_ATTEMPTS; attempt += 1) {
     const session = await mongoose.startSession();
+    let ambiguousCommit = false;
     try {
       session.startTransaction({
         readConcern: { level: "snapshot" },
         writeConcern: { w: "majority" },
       });
       const result = await work(session);
-      await session.commitTransaction();
-      return result;
+      let commitError;
+      for (
+        let commitAttempt = 1;
+        commitAttempt <= MAX_COMMIT_ATTEMPTS;
+        commitAttempt += 1
+      ) {
+        try {
+          await session.commitTransaction();
+          return result;
+        } catch (error) {
+          commitError = error;
+          if (hasErrorLabel(error, "UnknownTransactionCommitResult")) {
+            ambiguousCommit = true;
+            if (commitAttempt < MAX_COMMIT_ATTEMPTS)
+              await wait(25 * commitAttempt);
+            continue;
+          }
+          if (ambiguousCommit) break;
+          throw error;
+        }
+      }
+      if (ambiguousCommit) {
+        if (await reconcileAmbiguousCommit(reconcile)) return result;
+        throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {
+          message:
+            "The payment update outcome could not be confirmed. Refresh before trying again.",
+          cause: commitError,
+        });
+      }
+      throw commitError;
     } catch (error) {
       lastError = error;
-      if (session.inTransaction())
+      if (!ambiguousCommit && session.inTransaction())
         await session.abortTransaction().catch(() => {});
       if (
+        ambiguousCommit ||
         !retryableTransactionError(error) ||
         attempt === MAX_TRANSACTION_ATTEMPTS
       )
@@ -184,6 +250,69 @@ function assertInitiatableOrder(order) {
     throw new AppError(ErrorCode.INVALID_STATUS_TRANSITION);
 }
 
+function isInitiatableCustomOrder(order) {
+  return Boolean(
+    order &&
+    order.paymentMethod === "PREPAID" &&
+    order.paymentStatus === CustomOrderPaymentStatus.PREPAID_PENDING &&
+    order.productionStatus === CustomProductionStatus.NOT_STARTED &&
+    order.fulfillmentStatus === CustomFulfillmentStatus.UNFULFILLED &&
+    order.completionStatus === CustomCompletionStatus.OPEN,
+  );
+}
+
+function assertInitiatableCustomOrder(order) {
+  if (!order) throw new AppError(ErrorCode.CUSTOM_ORDER_NOT_FOUND);
+  if (!isInitiatableCustomOrder(order))
+    throw new AppError(ErrorCode.INVALID_CUSTOM_ORDER_TRANSITION);
+}
+
+function paymentType(payment) {
+  return payment.payableType ?? PaymentPayableType.ORDER;
+}
+
+async function customInitiationResponse(
+  payment,
+  { userId, orderNumber, fingerprint, adapter, replayed },
+) {
+  const order = await CustomOrder.findOne({ orderNumber, owner: userId });
+  if (
+    !order ||
+    paymentType(payment) !== PaymentPayableType.CUSTOM_ORDER ||
+    String(payment.customOrder) !== String(order._id) ||
+    payment.requestFingerprint !== fingerprint
+  )
+    throw new AppError(ErrorCode.IDEMPOTENCY_CONFLICT);
+  if (!isInitiatableCustomOrder(order))
+    return {
+      replayed,
+      payment: paymentInitiationDto(payment, null),
+    };
+
+  const resumed = await refreshExpiredAttempt(payment);
+  const stillInitiatable = await CustomOrder.exists({
+    _id: order._id,
+    owner: userId,
+    paymentMethod: "PREPAID",
+    paymentStatus: CustomOrderPaymentStatus.PREPAID_PENDING,
+    productionStatus: CustomProductionStatus.NOT_STARTED,
+    fulfillmentStatus: CustomFulfillmentStatus.UNFULFILLED,
+    completionStatus: CustomCompletionStatus.OPEN,
+  });
+  const actionable =
+    Boolean(stillInitiatable) &&
+    [PaymentAttemptStatus.PENDING, PaymentAttemptStatus.FAILED].includes(
+      resumed.status,
+    );
+  return {
+    replayed,
+    payment: paymentInitiationDto(
+      resumed,
+      actionable ? await adapter.initiate(resumed) : null,
+    ),
+  };
+}
+
 function assertBound(payment, result) {
   if (
     result.provider !== payment.provider ||
@@ -216,30 +345,35 @@ function eventHash(result) {
   );
 }
 
-async function auditVerified(payment, order, actor, req) {
-  await auditService.record({
-    action: AuditAction.PAYMENT_VERIFIED,
-    actor,
-    targetType: AuditTargetType.ORDER,
-    targetId: order._id,
-    targetLabel: order.orderNumber,
-    metadata: {
-      provider: payment.provider,
-      attemptId: String(payment._id),
-      paymentStatus: payment.status,
-      amountPaise: payment.amountPaise,
-      currency: payment.currency,
+async function auditVerified(payment, payable, actor, req, session) {
+  const custom = paymentType(payment) === PaymentPayableType.CUSTOM_ORDER;
+  await auditService.recordStrict(
+    {
+      action: AuditAction.PAYMENT_VERIFIED,
+      actor,
+      targetType: custom ? AuditTargetType.CUSTOM_ORDER : AuditTargetType.ORDER,
+      targetId: payable._id,
+      targetLabel: payable.orderNumber,
+      metadata: {
+        provider: payment.provider,
+        attemptId: String(payment._id),
+        paymentStatus: payment.status,
+        amountPaise: payment.amountPaise,
+        currency: payment.currency,
+      },
+      req,
     },
-    req,
-  });
+    session,
+  );
 }
 
-async function auditRefunded(payment, order) {
+async function auditRefunded(payment, payable) {
+  const custom = paymentType(payment) === PaymentPayableType.CUSTOM_ORDER;
   await auditService.record({
     action: AuditAction.PAYMENT_REFUNDED,
-    targetType: AuditTargetType.ORDER,
-    targetId: order._id,
-    targetLabel: order.orderNumber,
+    targetType: custom ? AuditTargetType.CUSTOM_ORDER : AuditTargetType.ORDER,
+    targetId: payable._id,
+    targetLabel: payable.orderNumber,
     metadata: {
       provider: payment.provider,
       attemptId: String(payment._id),
@@ -257,156 +391,359 @@ async function resolveDuplicateEvent(result, paymentId) {
     eventId: result.eventId,
   }).lean();
   if (!existing) return null;
-  if (existing.payloadHash !== eventHash(result)) throw verificationFailed();
+  if (
+    existing.payloadHash !== eventHash(result) ||
+    String(existing.payment) !== String(paymentId) ||
+    existing.providerReference !== result.merchantReference
+  )
+    throw verificationFailed();
   const payment = await Payment.findById(paymentId).lean();
   if (!payment) return null;
-  const order = await Order.findById(payment.order).lean();
+  const custom = paymentType(payment) === PaymentPayableType.CUSTOM_ORDER;
+  const order = custom
+    ? await CustomOrder.findById(payment.customOrder).lean()
+    : await Order.findById(payment.order).lean();
   return order
     ? { replayed: true, outcome: "DUPLICATE", payment, order }
     : null;
 }
 
-async function applyProviderEvent(paymentId, result) {
+async function publishPaymentConfirmedNotifications(
+  order,
+  occurredAt,
+  session,
+) {
+  await notificationService.publish(
+    {
+      eventKey: `order:${order._id}:${NotificationType.ORDER_PAYMENT_CONFIRMED}`,
+      type: NotificationType.ORDER_PAYMENT_CONFIRMED,
+      occurredAt,
+      payload: {},
+      customer: {
+        userId: order.user,
+        email: order.shippingAddress.email,
+        name: order.shippingAddress.recipientName,
+      },
+      customerTarget: {
+        kind: NotificationTargetKind.ORDER,
+        reference: order.orderNumber,
+      },
+    },
+    { session },
+  );
+  await notificationService.publish(
+    {
+      eventKey: `order:${order._id}:${NotificationType.ADMIN_PAYMENT_CONFIRMED}`,
+      type: NotificationType.ADMIN_PAYMENT_CONFIRMED,
+      occurredAt,
+      payload: {},
+      notifyAdmins: true,
+      adminTarget: {
+        kind: NotificationTargetKind.ORDER,
+        reference: order.orderNumber,
+      },
+    },
+    { session },
+  );
+}
+
+async function publishCustomPaymentConfirmedNotifications(
+  order,
+  request,
+  occurredAt,
+  session,
+) {
+  await notificationService.publish(
+    {
+      eventKey: `custom:${request._id}:payment:${NotificationType.CUSTOM_REQUEST_PAYMENT_CONFIRMED}`,
+      type: NotificationType.CUSTOM_REQUEST_PAYMENT_CONFIRMED,
+      occurredAt,
+      payload: {},
+      customer: {
+        userId: order.owner,
+        email: order.shippingAddress.email,
+        name: order.shippingAddress.recipientName,
+      },
+      customerTarget: {
+        kind: NotificationTargetKind.CUSTOM_REQUEST,
+        reference: request.requestNumber,
+      },
+    },
+    { session },
+  );
+  await notificationService.publish(
+    {
+      eventKey: `custom:${request._id}:payment:${NotificationType.ADMIN_CUSTOM_PAYMENT_CONFIRMED}`,
+      type: NotificationType.ADMIN_CUSTOM_PAYMENT_CONFIRMED,
+      occurredAt,
+      payload: {},
+      notifyAdmins: true,
+      adminTarget: {
+        kind: NotificationTargetKind.CUSTOM_REQUEST,
+        reference: request.requestNumber,
+      },
+    },
+    { session },
+  );
+}
+
+async function applyProviderEvent(paymentId, result, { actor, req } = {}) {
   await requireTransactions();
+  const binding = await Payment.findById(paymentId)
+    .select(
+      "payableType order customOrder provider merchantReference providerPaymentId amountPaise currency",
+    )
+    .lean();
+  if (!binding) throw verificationFailed();
+  assertBound(binding, result);
+  const customPayment =
+    paymentType(binding) === PaymentPayableType.CUSTOM_ORDER;
+  const expectedEventHash = eventHash(result);
+  const reconcile = customPayment
+    ? async () => {
+        const existing = await PaymentEvent.findOne({
+          provider: result.provider,
+          eventId: result.eventId,
+        })
+          .read("primary")
+          .readConcern("majority")
+          .lean();
+        if (!existing) return false;
+        if (
+          existing.payloadHash !== expectedEventHash ||
+          String(existing.payment) !== String(paymentId) ||
+          existing.payableType !== PaymentPayableType.CUSTOM_ORDER ||
+          String(existing.customOrder) !== String(binding.customOrder) ||
+          existing.providerReference !== binding.merchantReference
+        )
+          throw verificationFailed();
+        return true;
+      }
+    : undefined;
   try {
-    return await runTransaction(async (session) => {
-      const payment = await Payment.findById(paymentId).session(session);
-      if (!payment) throw verificationFailed();
-      assertBound(payment, result);
+    return await runTransaction(
+      async (session) => {
+        const payment = await Payment.findById(paymentId).session(session);
+        if (!payment) throw verificationFailed();
+        assertBound(payment, result);
 
-      const hash = eventHash(result);
-      const order = await Order.findById(payment.order).session(session);
-      if (!order) throw verificationFailed();
-      const existing = await PaymentEvent.findOne({
-        provider: result.provider,
-        eventId: result.eventId,
-      }).session(session);
-      if (existing) {
-        if (existing.payloadHash !== hash) throw verificationFailed();
-        return { replayed: true, outcome: "DUPLICATE", payment, order };
-      }
+        const hash = eventHash(result);
+        const custom = paymentType(payment) === PaymentPayableType.CUSTOM_ORDER;
+        const order = custom
+          ? await CustomOrder.findById(payment.customOrder).session(session)
+          : await Order.findById(payment.order).session(session);
+        if (!order) throw verificationFailed();
+        const existing = await PaymentEvent.findOne({
+          provider: result.provider,
+          eventId: result.eventId,
+        }).session(session);
+        if (existing) {
+          if (existing.payloadHash !== hash) throw verificationFailed();
+          return { replayed: true, outcome: "DUPLICATE", payment, order };
+        }
 
-      const event = new PaymentEvent({
-        provider: result.provider,
-        eventId: result.eventId,
-        eventType: result.kind,
-        payloadHash: hash,
-        payment: payment._id,
-        order: order._id,
-        providerReference: result.providerReference,
-        providerPaymentId: result.providerPaymentId,
-        occurredAt: result.occurredAt,
-        status: PaymentEventStatus.PROCESSED,
-      });
+        const event = new PaymentEvent({
+          provider: result.provider,
+          eventId: result.eventId,
+          eventType: result.kind,
+          payloadHash: hash,
+          payment: payment._id,
+          payableType: custom
+            ? PaymentPayableType.CUSTOM_ORDER
+            : PaymentPayableType.ORDER,
+          ...(custom ? { customOrder: order._id } : { order: order._id }),
+          providerReference: result.providerReference,
+          providerPaymentId: result.providerPaymentId,
+          occurredAt: result.occurredAt,
+          status: PaymentEventStatus.PROCESSED,
+        });
 
-      let outcome = "IGNORED";
-      if (result.kind === PaymentEventType.PAYMENT_SUCCEEDED) {
-        if (payment.status === PaymentAttemptStatus.REFUNDED) {
-          event.status = PaymentEventStatus.IGNORED;
-          outcome = "TERMINAL_REFUNDED";
-        } else if (
-          [
-            PaymentAttemptStatus.RECONCILIATION_REQUIRED,
-            PaymentAttemptStatus.REFUND_PENDING,
-          ].includes(payment.status)
-        ) {
-          event.status = PaymentEventStatus.IGNORED;
-          outcome = "REFUND_RETRY";
-        } else if (payment.status === PaymentAttemptStatus.CONFIRMED) {
-          event.status = PaymentEventStatus.IGNORED;
-          outcome = "DUPLICATE_SUCCESS";
-        } else if (
-          order.placementStatus === OrderPlacementStatus.RELEASED ||
-          order.paymentStatus === OrderPaymentStatus.CANCELLED
-        ) {
-          payment.status = PaymentAttemptStatus.RECONCILIATION_REQUIRED;
-          payment.providerPaymentId = result.providerPaymentId;
-          payment.history.push({
-            status: PaymentAttemptStatus.RECONCILIATION_REQUIRED,
-            reason: "Payment succeeded after placement release",
-            at: new Date(),
-          });
-          event.status = PaymentEventStatus.RECONCILIATION_REQUIRED;
-          outcome = "LATE_SUCCESS";
-        } else {
+        let outcome = "IGNORED";
+        if (result.kind === PaymentEventType.PAYMENT_SUCCEEDED) {
+          if (payment.status === PaymentAttemptStatus.REFUNDED) {
+            event.status = PaymentEventStatus.IGNORED;
+            outcome = "TERMINAL_REFUNDED";
+          } else if (
+            [
+              PaymentAttemptStatus.RECONCILIATION_REQUIRED,
+              PaymentAttemptStatus.REFUND_PENDING,
+            ].includes(payment.status)
+          ) {
+            event.status = PaymentEventStatus.IGNORED;
+            outcome = "REFUND_RETRY";
+          } else if (payment.status === PaymentAttemptStatus.CONFIRMED) {
+            event.status = PaymentEventStatus.IGNORED;
+            outcome = "DUPLICATE_SUCCESS";
+          } else if (
+            custom &&
+            (order.paymentStatus === CustomOrderPaymentStatus.CANCELLED ||
+              order.completionStatus === CustomCompletionStatus.CANCELLED)
+          ) {
+            payment.status = PaymentAttemptStatus.RECONCILIATION_REQUIRED;
+            payment.providerPaymentId = result.providerPaymentId;
+            payment.history.push({
+              status: PaymentAttemptStatus.RECONCILIATION_REQUIRED,
+              reason: "Payment succeeded after custom-order cancellation",
+              at: new Date(),
+            });
+            event.status = PaymentEventStatus.RECONCILIATION_REQUIRED;
+            outcome = "LATE_SUCCESS";
+          } else if (
+            !custom &&
+            (order.placementStatus === OrderPlacementStatus.RELEASED ||
+              order.paymentStatus === OrderPaymentStatus.CANCELLED)
+          ) {
+            payment.status = PaymentAttemptStatus.RECONCILIATION_REQUIRED;
+            payment.providerPaymentId = result.providerPaymentId;
+            payment.history.push({
+              status: PaymentAttemptStatus.RECONCILIATION_REQUIRED,
+              reason: "Payment succeeded after placement release",
+              at: new Date(),
+            });
+            event.status = PaymentEventStatus.RECONCILIATION_REQUIRED;
+            outcome = "LATE_SUCCESS";
+          } else {
+            const now = new Date();
+            if (custom) {
+              assertInitiatableCustomOrder(order);
+              payment.status = PaymentAttemptStatus.CONFIRMED;
+              payment.providerPaymentId = result.providerPaymentId;
+              payment.confirmedAt = now;
+              payment.failedAt = undefined;
+              payment.history.push({
+                status: PaymentAttemptStatus.CONFIRMED,
+                reason: "Provider payment verified",
+                at: now,
+              });
+              order.paymentStatus = CustomOrderPaymentStatus.PREPAID_CONFIRMED;
+              order.paidAt = now;
+              order.history.push({
+                axis: "PAYMENT",
+                status: CustomOrderPaymentStatus.PREPAID_CONFIRMED,
+                action: CustomRequestAction.PAYMENT_CONFIRMED,
+                at: now,
+                requestId: `payment:${result.eventId}`,
+                version: order.__v + 1,
+              });
+              order.increment();
+              await order.save({ session });
+              const request = await CustomRequest.findById(
+                order.request,
+              ).session(session);
+              if (!request) throw verificationFailed();
+              request.status = CustomRequestStatus.PAYMENT_COMPLETED;
+              request.history.push({
+                action: CustomRequestAction.PAYMENT_CONFIRMED,
+                status: CustomRequestStatus.PAYMENT_COMPLETED,
+                at: now,
+                actor: order.owner,
+                requestId: `payment:${result.eventId}`,
+                version: request.__v + 1,
+              });
+              request.increment();
+              await request.save({ session });
+            } else {
+              if (
+                order.paymentMethod !== OrderPaymentMethod.PREPAID ||
+                order.placementStatus !== OrderPlacementStatus.PLACED ||
+                order.fulfillmentStatus !==
+                  OrderFulfillmentStatus.UNFULFILLED ||
+                order.paymentStatus !== OrderPaymentStatus.PREPAID_PENDING
+              )
+                throw new AppError(ErrorCode.INVALID_STATUS_TRANSITION);
+              payment.status = PaymentAttemptStatus.CONFIRMED;
+              payment.providerPaymentId = result.providerPaymentId;
+              payment.confirmedAt = now;
+              payment.failedAt = undefined;
+              payment.history.push({
+                status: PaymentAttemptStatus.CONFIRMED,
+                reason: "Provider payment verified",
+                at: now,
+              });
+              order.paymentStatus = OrderPaymentStatus.PREPAID_CONFIRMED;
+              order.paidAt = now;
+              order.statusHistory.push({
+                domain: "PAYMENT",
+                status: OrderPaymentStatus.PREPAID_CONFIRMED,
+                reason: "Provider payment verified",
+                at: now,
+              });
+              await order.save({ session });
+            }
+            outcome = "CONFIRMED";
+          }
+        } else if (result.kind === PaymentEventType.PAYMENT_FAILED) {
           if (
-            order.paymentMethod !== OrderPaymentMethod.PREPAID ||
-            order.placementStatus !== OrderPlacementStatus.PLACED ||
-            order.fulfillmentStatus !== OrderFulfillmentStatus.UNFULFILLED ||
-            order.paymentStatus !== OrderPaymentStatus.PREPAID_PENDING
-          )
-            throw new AppError(ErrorCode.INVALID_STATUS_TRANSITION);
-          const now = new Date();
-          payment.status = PaymentAttemptStatus.CONFIRMED;
-          payment.providerPaymentId = result.providerPaymentId;
-          payment.confirmedAt = now;
-          payment.failedAt = undefined;
-          payment.history.push({
-            status: PaymentAttemptStatus.CONFIRMED,
-            reason: "Provider payment verified",
-            at: now,
-          });
-          order.paymentStatus = OrderPaymentStatus.PREPAID_CONFIRMED;
-          order.paidAt = now;
-          order.statusHistory.push({
-            domain: "PAYMENT",
-            status: OrderPaymentStatus.PREPAID_CONFIRMED,
-            reason: "Provider payment verified",
-            at: now,
-          });
-          await order.save({ session });
-          outcome = "CONFIRMED";
-        }
-      } else if (result.kind === PaymentEventType.PAYMENT_FAILED) {
-        if (
-          [
-            PaymentAttemptStatus.CONFIRMED,
-            PaymentAttemptStatus.REFUNDED,
-            PaymentAttemptStatus.RECONCILIATION_REQUIRED,
-            PaymentAttemptStatus.REFUND_PENDING,
-          ].includes(payment.status)
-        ) {
-          event.status = PaymentEventStatus.IGNORED;
-          outcome = "IGNORED_FAILURE";
+            [
+              PaymentAttemptStatus.CONFIRMED,
+              PaymentAttemptStatus.REFUNDED,
+              PaymentAttemptStatus.RECONCILIATION_REQUIRED,
+              PaymentAttemptStatus.REFUND_PENDING,
+            ].includes(payment.status)
+          ) {
+            event.status = PaymentEventStatus.IGNORED;
+            outcome = "IGNORED_FAILURE";
+          } else {
+            const now = new Date();
+            payment.status = PaymentAttemptStatus.FAILED;
+            payment.failedAt = now;
+            payment.providerPaymentId = result.providerPaymentId;
+            payment.history.push({
+              status: PaymentAttemptStatus.FAILED,
+              reason: "Provider reported payment failure",
+              at: now,
+            });
+            outcome = "FAILED";
+          }
+        } else if (result.kind === PaymentEventType.REFUND_SUCCEEDED) {
+          if (
+            [
+              PaymentAttemptStatus.RECONCILIATION_REQUIRED,
+              PaymentAttemptStatus.REFUND_PENDING,
+            ].includes(payment.status)
+          ) {
+            payment.status = PaymentAttemptStatus.REFUNDED;
+            payment.refundedAt = new Date(result.occurredAt);
+            payment.history.push({
+              status: PaymentAttemptStatus.REFUNDED,
+              reason: "Provider refund verified",
+              at: payment.refundedAt,
+            });
+            outcome = "REFUNDED";
+          } else {
+            event.status = PaymentEventStatus.IGNORED;
+            outcome = "IGNORED_REFUND";
+          }
         } else {
-          const now = new Date();
-          payment.status = PaymentAttemptStatus.FAILED;
-          payment.failedAt = now;
-          payment.providerPaymentId = result.providerPaymentId;
-          payment.history.push({
-            status: PaymentAttemptStatus.FAILED,
-            reason: "Provider reported payment failure",
-            at: now,
-          });
-          outcome = "FAILED";
+          throw verificationFailed();
         }
-      } else if (result.kind === PaymentEventType.REFUND_SUCCEEDED) {
-        if (
-          [
-            PaymentAttemptStatus.RECONCILIATION_REQUIRED,
-            PaymentAttemptStatus.REFUND_PENDING,
-          ].includes(payment.status)
-        ) {
-          payment.status = PaymentAttemptStatus.REFUNDED;
-          payment.refundedAt = new Date(result.occurredAt);
-          payment.history.push({
-            status: PaymentAttemptStatus.REFUNDED,
-            reason: "Provider refund verified",
-            at: payment.refundedAt,
-          });
-          outcome = "REFUNDED";
-        } else {
-          event.status = PaymentEventStatus.IGNORED;
-          outcome = "IGNORED_REFUND";
-        }
-      } else {
-        throw verificationFailed();
-      }
 
-      await payment.save({ session });
-      await event.save({ session });
-      return { replayed: false, outcome, payment, order };
-    });
+        await payment.save({ session });
+        await event.save({ session });
+        if (outcome === "CONFIRMED") {
+          if (custom) {
+            const request = await CustomRequest.findById(order.request).session(
+              session,
+            );
+            await publishCustomPaymentConfirmedNotifications(
+              order,
+              request,
+              order.paidAt,
+              session,
+            );
+          } else {
+            await publishPaymentConfirmedNotifications(
+              order,
+              order.paidAt,
+              session,
+            );
+          }
+          await auditVerified(payment, order, actor, req, session);
+        }
+        return { replayed: false, outcome, payment, order };
+      },
+      { reconcile },
+    );
   } catch (error) {
     if (error?.code === 11000) {
       const duplicate = await resolveDuplicateEvent(result, paymentId);
@@ -533,6 +870,7 @@ async function initiate(actor, orderId, rawIdempotencyKey) {
       const [payment] = await Payment.create(
         [
           {
+            payableType: PaymentPayableType.ORDER,
             order: order._id,
             user: userId,
             provider: adapter.provider,
@@ -602,19 +940,165 @@ async function verify(actor, orderId, input, req) {
   )
     return { replayed: true, payment: paymentResultDto(payment) };
   if (refundNeedsDispatch(payment)) {
-    const order = await Order.findById(payment.order);
+    const order =
+      paymentType(payment) === PaymentPayableType.CUSTOM_ORDER
+        ? await CustomOrder.findById(payment.customOrder)
+        : await Order.findById(payment.order);
     if (!order) throw verificationFailed();
     const reconciled = await dispatchRefund(payment, order);
     return { replayed: true, payment: paymentResultDto(reconciled) };
   }
   const adapter = prepaidAdapter();
   const result = await adapter.verify(payment, input);
-  const applied = await applyProviderEvent(payment._id, result);
+  const applied = await applyProviderEvent(payment._id, result, {
+    actor,
+    req,
+  });
   let finalPayment = applied.payment;
   if (refundNeedsDispatch(applied.payment))
     finalPayment = await dispatchRefund(applied.payment, applied.order);
-  if (applied.outcome === "CONFIRMED")
-    await auditVerified(applied.payment, applied.order, actor, req);
+  return {
+    replayed: applied.replayed,
+    payment: paymentResultDto(finalPayment),
+  };
+}
+
+async function initiateCustom(actor, orderNumber, rawIdempotencyKey) {
+  const adapter = prepaidAdapter();
+  await requireTransactions();
+  const userId = actor._id;
+  const keyHash = sha256(rawIdempotencyKey);
+  const fingerprintValue = sha256(
+    canonicalJson({
+      payableType: PaymentPayableType.CUSTOM_ORDER,
+      orderNumber,
+    }),
+  );
+  const responseFor = (payment, replayed) =>
+    customInitiationResponse(payment, {
+      userId,
+      orderNumber,
+      fingerprint: fingerprintValue,
+      adapter,
+      replayed,
+    });
+
+  const keyed = await Payment.findOne({
+    user: userId,
+    idempotencyKeyHash: keyHash,
+  });
+  if (keyed) return responseFor(keyed, true);
+
+  const customOrder = await CustomOrder.findOne({ orderNumber, owner: userId });
+  assertInitiatableCustomOrder(customOrder);
+  const existing = await Payment.findOne({
+    customOrder: customOrder._id,
+    user: userId,
+  });
+  if (existing) return responseFor(existing, true);
+
+  let committed;
+  try {
+    committed = await runTransaction(
+      async (session) => {
+        const order = await CustomOrder.findOne({
+          _id: customOrder._id,
+          owner: userId,
+        }).session(session);
+        assertInitiatableCustomOrder(order);
+        const now = new Date();
+        const [payment] = await Payment.create(
+          [
+            {
+              payableType: PaymentPayableType.CUSTOM_ORDER,
+              customOrder: order._id,
+              user: userId,
+              provider: adapter.provider,
+              merchantReference: `PAY_${crypto.randomBytes(18).toString("base64url")}`,
+              refundReference: `RFN_${crypto.randomBytes(18).toString("base64url")}`,
+              idempotencyKeyHash: keyHash,
+              requestFingerprint: fingerprintValue,
+              amountPaise: order.quote.finalPaise,
+              currency: PaymentCurrency.INR,
+              status: PaymentAttemptStatus.PENDING,
+              expiresAt: attemptExpiry(),
+              history: [
+                {
+                  status: PaymentAttemptStatus.PENDING,
+                  reason: "Custom-order payment initiated",
+                  at: now,
+                },
+              ],
+            },
+          ],
+          { session },
+        );
+        return payment;
+      },
+      {
+        reconcile: async () =>
+          Boolean(
+            await Payment.exists({
+              payableType: PaymentPayableType.CUSTOM_ORDER,
+              customOrder: customOrder._id,
+              user: userId,
+              provider: adapter.provider,
+              idempotencyKeyHash: keyHash,
+              requestFingerprint: fingerprintValue,
+              amountPaise: customOrder.quote.finalPaise,
+              currency: PaymentCurrency.INR,
+            })
+              .read("primary")
+              .readConcern("majority"),
+          ),
+      },
+    );
+  } catch (error) {
+    if (error?.code === 11000) {
+      const replay = await Payment.findOne({
+        $or: [
+          { customOrder: customOrder._id, user: userId },
+          { user: userId, idempotencyKeyHash: keyHash },
+        ],
+      });
+      if (replay) return responseFor(replay, true);
+    }
+    throw error;
+  }
+  return responseFor(committed, false);
+}
+
+async function verifyCustom(actor, orderNumber, input, req) {
+  const order = await CustomOrder.findOne({
+    orderNumber,
+    owner: actor._id,
+  }).select("_id");
+  if (!order) throw new AppError(ErrorCode.CUSTOM_ORDER_NOT_FOUND);
+  const payment = await Payment.findOne({
+    _id: input.attemptId,
+    customOrder: order._id,
+    user: actor._id,
+  });
+  if (!payment) throw new AppError(ErrorCode.CUSTOM_ORDER_NOT_FOUND);
+  if (
+    [PaymentAttemptStatus.CONFIRMED, PaymentAttemptStatus.REFUNDED].includes(
+      payment.status,
+    )
+  )
+    return { replayed: true, payment: paymentResultDto(payment) };
+  if (refundNeedsDispatch(payment)) {
+    const payable = await CustomOrder.findById(payment.customOrder);
+    const reconciled = await dispatchRefund(payment, payable);
+    return { replayed: true, payment: paymentResultDto(reconciled) };
+  }
+  const result = await prepaidAdapter().verify(payment, input);
+  const applied = await applyProviderEvent(payment._id, result, {
+    actor,
+    req,
+  });
+  let finalPayment = applied.payment;
+  if (refundNeedsDispatch(applied.payment))
+    finalPayment = await dispatchRefund(applied.payment, applied.order);
   return {
     replayed: applied.replayed,
     payment: paymentResultDto(finalPayment),
@@ -634,11 +1118,9 @@ async function handleWebhook({ rawBody, signature, timestamp, payload, req }) {
     merchantReference: result.merchantReference,
   });
   if (!payment) throw verificationFailed();
-  const applied = await applyProviderEvent(payment._id, result);
+  const applied = await applyProviderEvent(payment._id, result, { req });
   if (refundNeedsDispatch(applied.payment))
     applied.payment = await dispatchRefund(applied.payment, applied.order);
-  if (applied.outcome === "CONFIRMED")
-    await auditVerified(applied.payment, applied.order, undefined, req);
   return { replayed: applied.replayed, outcome: applied.outcome };
 }
 
@@ -647,14 +1129,19 @@ async function refund(paymentId) {
   if (!payment) throw verificationFailed();
   if (!refundNeedsDispatch(payment))
     throw new AppError(ErrorCode.INVALID_STATUS_TRANSITION);
-  const order = await Order.findById(payment.order);
+  const order =
+    paymentType(payment) === PaymentPayableType.CUSTOM_ORDER
+      ? await CustomOrder.findById(payment.customOrder)
+      : await Order.findById(payment.order);
   if (!order) throw verificationFailed();
   return dispatchRefund(payment, order);
 }
 
 export const paymentService = Object.freeze({
   initiate,
+  initiateCustom,
   verify,
+  verifyCustom,
   handleWebhook,
   refund,
 });

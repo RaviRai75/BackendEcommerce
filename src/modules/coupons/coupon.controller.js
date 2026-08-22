@@ -1,5 +1,9 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
-import { sendCreated, sendPaginated, sendSuccess } from "../../utils/response.js";
+import {
+  sendCreated,
+  sendPaginated,
+  sendSuccess,
+} from "../../utils/response.js";
 import { couponService } from "./coupon.service.js";
 
 export const validateCoupon = asyncHandler(async (req, res) => {
@@ -20,6 +24,12 @@ export const getAdminCoupon = asyncHandler(async (req, res) => {
   sendSuccess(res, await couponService.getAdminById(req.params.couponId));
 });
 
+export const searchAdminCouponCustomerOptions = asyncHandler(
+  async (req, res) => {
+    sendSuccess(res, await couponService.searchCustomerOptions(req.body));
+  },
+);
+
 export const createCoupon = asyncHandler(async (req, res) => {
   sendCreated(res, await couponService.create(req.body, req.user, req));
 });
@@ -27,11 +37,6 @@ export const createCoupon = asyncHandler(async (req, res) => {
 export const updateCoupon = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await couponService.update(
-      req.params.couponId,
-      req.body,
-      req.user,
-      req,
-    ),
+    await couponService.update(req.params.couponId, req.body, req.user, req),
   );
 });

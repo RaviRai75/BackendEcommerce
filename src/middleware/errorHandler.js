@@ -93,7 +93,7 @@ export function errorHandler(error, req, res, _next) {
         requestId,
         code: appError.code,
         status: appError.status,
-        path: req.originalUrl,
+        path: req.path,
         method: req.method,
         userId: req.user?.id,
         meta: appError.meta,
@@ -116,7 +116,7 @@ export function errorHandler(error, req, res, _next) {
   logger.error(
     {
       requestId,
-      path: req.originalUrl,
+      path: req.path,
       method: req.method,
       userId: req.user?.id,
       err: error,

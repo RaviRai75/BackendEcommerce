@@ -1,16 +1,10 @@
 /**
  * Audit service.
  *
- * The single way anything is written to the audit log. Two behaviours make it
- * safe to call from inside business logic:
- *
- *   1. It never throws. A failure to record an audit entry must not roll back the
- *      action it was describing — an order that shipped but was not logged is a
- *      gap in the trail, whereas an order that failed to ship because logging
- *      broke is a lost sale. Failures are logged loudly instead.
- *   2. It scrubs. Callers pass whatever context they have, and known-sensitive
- *      keys are stripped before anything is written, so a careless call site
- *      cannot put a password or a token in the database (§25, §26).
+ * The single way anything is written to the audit log. `record` remains
+ * best-effort for ordinary callers, while `recordStrict` lets a business
+ * transaction require its audit row to commit atomically. Both paths use the
+ * same actor, request-context, and metadata scrubbing below.
  */
 import { SENSITIVE_KEYS } from "../../utils/logger.js";
 import { createLogger } from "../../utils/logger.js";
@@ -83,57 +77,82 @@ function contextFromRequest(req) {
   };
 }
 
+function auditDocument({
+  action,
+  outcome = AuditOutcome.SUCCESS,
+  actor,
+  targetType = AuditTargetType.SYSTEM,
+  targetId,
+  targetLabel,
+  metadata,
+  req,
+}) {
+  const actorId =
+    typeof actor === "string" ? actor : (actor?._id?.toString?.() ?? actor?.id);
+
+  return {
+    action,
+    outcome,
+    actor: actorId,
+    actorRole: typeof actor === "object" ? actor?.role : undefined,
+    targetType,
+    targetId: targetId ? String(targetId) : undefined,
+    targetLabel,
+    metadata: metadata ? scrubMetadata(metadata) : undefined,
+    ...contextFromRequest(req),
+  };
+}
+
+async function writeAudit(entry, session) {
+  const document = auditDocument(entry);
+  if (!session) return AuditLog.create(document);
+  const [stored] = await AuditLog.create([document], { session });
+  return stored;
+}
+
+function logWriteFailure(error, entry) {
+  log.error(
+    {
+      err: error,
+      action: entry.action,
+      targetType: entry.targetType ?? AuditTargetType.SYSTEM,
+      targetId: entry.targetId,
+    },
+    "failed to write an audit entry",
+  );
+}
+
 export const auditService = {
   /**
-   * Records an auditable action.
+   * Records an auditable action on a best-effort basis.
    *
    * @param {object} entry
-   * @param {string} entry.action one of {@link AuditAction}
-   * @param {string} [entry.outcome] one of {@link AuditOutcome}
-   * @param {object|string} [entry.actor] the acting user, or their id
-   * @param {string} [entry.targetType] one of {@link AuditTargetType}
-   * @param {string} [entry.targetId]
-   * @param {string} [entry.targetLabel]
-   * @param {object} [entry.metadata] scrubbed before storage
-   * @param {import('express').Request} [entry.req] request context
    * @returns {Promise<object|null>} the stored entry, or null if it could not be written
    */
-  async record({
-    action,
-    outcome = AuditOutcome.SUCCESS,
-    actor,
-    targetType = AuditTargetType.SYSTEM,
-    targetId,
-    targetLabel,
-    metadata,
-    req,
-  }) {
+  async record(entry) {
     try {
-      const actorId =
-        typeof actor === "string"
-          ? actor
-          : (actor?._id?.toString?.() ?? actor?.id);
-
-      const entry = await AuditLog.create({
-        action,
-        outcome,
-        actor: actorId,
-        actorRole: typeof actor === "object" ? actor?.role : undefined,
-        targetType,
-        targetId: targetId ? String(targetId) : undefined,
-        targetLabel,
-        metadata: metadata ? scrubMetadata(metadata) : undefined,
-        ...contextFromRequest(req),
-      });
-
-      return entry;
+      return await writeAudit(entry);
     } catch (error) {
-      // Never propagate: see the note at the top of this file.
-      log.error(
-        { err: error, action, targetType, targetId },
-        "failed to write an audit entry",
-      );
+      logWriteFailure(error, entry);
       return null;
+    }
+  },
+
+  /**
+   * Records an auditable action as part of a caller-owned transaction.
+   * Uses the exact same normalization and scrubbing as {@link record}, but
+   * propagates failure so the business transaction cannot commit without it.
+   *
+   * @param {object} entry
+   * @param {import('mongoose').ClientSession} session
+   * @returns {Promise<object>} the stored entry
+   */
+  async recordStrict(entry, session) {
+    try {
+      return await writeAudit(entry, session);
+    } catch (error) {
+      logWriteFailure(error, entry);
+      throw error;
     }
   },
 

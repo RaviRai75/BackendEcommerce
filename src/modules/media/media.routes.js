@@ -1,20 +1,28 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
 import {
+  customizationLimiter,
   exchangeLimiter,
+  reviewLimiter,
   uploadLimiter,
 } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
 import {
+  completeCustomRequestUpload,
   completeExchangeUpload,
+  completeReviewUpload,
   completeUpload,
+  createCustomRequestUploadIntent,
   createExchangeUploadIntent,
+  createReviewUploadIntent,
   createUploadIntent,
   deleteMediaAsset,
 } from "./media.controller.js";
 import {
   completeUploadSchema,
+  createCustomRequestUploadIntentSchema,
   createExchangeUploadIntentSchema,
+  createReviewUploadIntentSchema,
   createUploadIntentSchema,
   mediaAssetIdParamSchema,
 } from "./media.validator.js";
@@ -35,6 +43,38 @@ mediaRoutes.post(
   exchangeLimiter,
   validate({ body: completeUploadSchema }),
   completeExchangeUpload,
+);
+
+mediaRoutes.post(
+  "/media/reviews/upload-intents",
+  requireAuth,
+  reviewLimiter,
+  validate({ body: createReviewUploadIntentSchema }),
+  createReviewUploadIntent,
+);
+
+mediaRoutes.post(
+  "/media/reviews/uploads/complete",
+  requireAuth,
+  reviewLimiter,
+  validate({ body: completeUploadSchema }),
+  completeReviewUpload,
+);
+
+mediaRoutes.post(
+  "/media/custom-requests/upload-intents",
+  requireAuth,
+  customizationLimiter,
+  validate({ body: createCustomRequestUploadIntentSchema }),
+  createCustomRequestUploadIntent,
+);
+
+mediaRoutes.post(
+  "/media/custom-requests/uploads/complete",
+  requireAuth,
+  customizationLimiter,
+  validate({ body: completeUploadSchema }),
+  completeCustomRequestUpload,
 );
 
 mediaRoutes.post(

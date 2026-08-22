@@ -1,7 +1,9 @@
+import { customizationDefinitionSchema } from "../customization/customizationConfig.js";
 import {
   createSchema,
   demoFlag,
   longText,
+  ref,
   registerModel,
   shortText,
   slug,
@@ -21,6 +23,22 @@ const categorySchema = createSchema(
     seo: {
       title: shortText({ max: 70 }),
       description: shortText({ max: 180 }),
+    },
+    customization: {
+      type: customizationDefinitionSchema,
+      default: () => ({
+        existingProductEnabled: false,
+        ownDesignEnabled: false,
+        optionGroups: [],
+        ageGroups: [],
+        sizes: [],
+        measurementFields: [],
+        referenceImageLimit: 0,
+      }),
+    },
+    sizeGuide: {
+      ...ref("SizeGuide"),
+      default: null,
     },
     status: {
       type: String,

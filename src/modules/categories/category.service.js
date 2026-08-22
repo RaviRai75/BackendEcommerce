@@ -8,6 +8,11 @@ import {
 import { Product, ProductStatus } from "../products/product.model.js";
 import { auditService } from "../system/audit.service.js";
 import { AuditAction, AuditTargetType } from "../system/auditLog.model.js";
+import {
+  safeCustomizationDto,
+  resolveEffectiveCustomization,
+} from "../customization/customizationConfig.js";
+import { sizeGuideService } from "../sizeGuides/sizeGuide.service.js";
 import { Category, CategoryStatus } from "./category.model.js";
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -22,6 +27,9 @@ function publicCategory(category) {
       title: category.seo?.title ?? null,
       description: category.seo?.description ?? null,
     },
+    customization: safeCustomizationDto(
+      resolveEffectiveCustomization(null, category),
+    ),
   };
 }
 
@@ -29,7 +37,9 @@ function adminCategory(category) {
   const value = category.toObject ? category.toObject() : category;
   return {
     ...publicCategory(value),
+    sizeGuideId: value.sizeGuide?.toString?.() ?? null,
     status: value.status,
+    revision: value.__v ?? 0,
     sortOrder: value.sortOrder,
     publishedAt: value.publishedAt ?? null,
     archivedAt: value.archivedAt ?? null,
@@ -96,11 +106,14 @@ export const categoryService = {
   },
 
   async create(input, actor, req) {
+    await sizeGuideService.assertExists(input.sizeGuideId);
     const category = await Category.create({
       name: input.name,
       slug: input.slug,
       description: input.description,
       seo: input.seo,
+      customization: input.customization,
+      sizeGuide: input.sizeGuideId ?? null,
       sortOrder: input.sortOrder,
     });
     await auditService.record({
@@ -115,22 +128,62 @@ export const categoryService = {
   },
 
   async update(id, input, actor, req) {
-    const category = await Category.findById(id);
-    if (!category) throw AppError.notFound("Category");
-    if (category.status === CategoryStatus.ARCHIVED) {
-      throw new AppError(ErrorCode.VALIDATION_ERROR, {
-        message: "Archived categories cannot be changed.",
-      });
-    }
-
     const changedFields = [];
-    for (const field of ["name", "slug", "description", "seo", "sortOrder"]) {
+    const fields = {};
+    for (const field of [
+      "name",
+      "slug",
+      "description",
+      "seo",
+      "customization",
+      "sortOrder",
+    ]) {
       if (Object.hasOwn(input, field)) {
-        category.set(field, input[field]);
+        fields[field] = input[field];
         changedFields.push(field);
       }
     }
-    await category.save();
+    if (Object.hasOwn(input, "sizeGuideId")) {
+      fields.sizeGuide = input.sizeGuideId ?? null;
+      changedFields.push("sizeGuide");
+    }
+
+    const category = await withCatalogueWrite(async (session) => {
+      const current = await inSession(Category.findById(id), session);
+      if (!current) throw AppError.notFound("Category");
+      if (current.__v !== input.expectedRevision) {
+        throw new AppError(ErrorCode.STOCK_CHANGED, {
+          message:
+            "This category changed after you loaded it. Reload and try again.",
+        });
+      }
+      if (current.status === CategoryStatus.ARCHIVED) {
+        throw new AppError(ErrorCode.VALIDATION_ERROR, {
+          message: "Archived categories cannot be changed.",
+        });
+      }
+      if (Object.hasOwn(input, "sizeGuideId")) {
+        await sizeGuideService.assertExists(input.sizeGuideId, { session });
+      }
+
+      const updated = await Category.findOneAndUpdate(
+        {
+          _id: id,
+          __v: input.expectedRevision,
+          status: { $ne: CategoryStatus.ARCHIVED },
+        },
+        { $set: fields, $inc: { __v: 1 } },
+        { new: true, runValidators: true, session },
+      );
+      if (!updated) {
+        throw new AppError(ErrorCode.STOCK_CHANGED, {
+          message:
+            "This category changed after you loaded it. Reload and try again.",
+        });
+      }
+      return updated;
+    });
+
     await auditService.record({
       action: AuditAction.CATEGORY_UPDATED,
       actor,
@@ -143,11 +196,22 @@ export const categoryService = {
     return adminCategory(category);
   },
 
-  async setStatus(id, status, actor, req) {
+  async setStatus(id, input, actor, req) {
+    const { status, expectedRevision } = input;
     let changed = false;
     const category = await withCatalogueWrite(async (session) => {
-      const document = await inSession(Category.findById(id), session);
-      if (!document) throw AppError.notFound("Category");
+      const document = await inSession(
+        Category.findOne({ _id: id, __v: expectedRevision }),
+        session,
+      );
+      if (!document) {
+        if (await inSession(Category.exists({ _id: id }), session))
+          throw new AppError(ErrorCode.STOCK_CHANGED, {
+            message:
+              "This category changed after you loaded it. Reload and try again.",
+          });
+        throw AppError.notFound("Category");
+      }
       if (document.status === CategoryStatus.ARCHIVED) {
         throw new AppError(ErrorCode.VALIDATION_ERROR, {
           message: "Archived categories cannot be restored.",
@@ -170,6 +234,7 @@ export const categoryService = {
         status === CategoryStatus.PUBLISHED ? new Date() : undefined;
       document.archivedAt =
         status === CategoryStatus.ARCHIVED ? new Date() : undefined;
+      document.increment();
       await document.save(saveOptions(session));
 
       changed = true;

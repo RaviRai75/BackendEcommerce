@@ -50,6 +50,16 @@ const cartSchema = createSchema(
         },
       ],
     },
+    activityRevision: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+      validate: {
+        validator: Number.isSafeInteger,
+        message: "Cart activity revision must be a safe whole number.",
+      },
+    },
   },
   { collection: "carts" },
 );

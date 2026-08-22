@@ -1,15 +1,20 @@
 import { Router } from "express";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAdmin, requireAuth } from "../../middleware/auth.js";
 import { exchangeLimiter } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
 import { AppError } from "../../utils/AppError.js";
 import {
   createExchange,
+  getAdminExchange,
   getExchange,
   getExchangeEligibility,
+  listAdminExchanges,
   listExchanges,
+  performAdminExchangeAction,
 } from "./exchange.controller.js";
 import {
+  adminExchangeActionSchema,
+  adminExchangeListQuerySchema,
   createExchangeSchema,
   exchangeEligibilityParamSchema,
   exchangeListQuerySchema,
@@ -67,4 +72,32 @@ exchangeRoutes.post(
   requireIdempotencyKey,
   validate({ body: createExchangeSchema }),
   createExchange,
+);
+
+exchangeRoutes.get(
+  "/admin/exchanges",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({ query: adminExchangeListQuerySchema }),
+  listAdminExchanges,
+);
+exchangeRoutes.get(
+  "/admin/exchanges/:exchangeNumber",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({ params: exchangeNumberParamSchema }),
+  getAdminExchange,
+);
+exchangeRoutes.post(
+  "/admin/exchanges/:exchangeNumber/actions",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({
+    params: exchangeNumberParamSchema,
+    body: adminExchangeActionSchema,
+  }),
+  performAdminExchangeAction,
 );

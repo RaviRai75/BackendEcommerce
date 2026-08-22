@@ -4,7 +4,7 @@ import {
   registerModel,
   shortText,
 } from "../../utils/schema.js";
-import { PaymentProvider } from "./payment.model.js";
+import { PaymentPayableType, PaymentProvider } from "./payment.model.js";
 
 export const PaymentEventType = Object.freeze({
   PAYMENT_SUCCEEDED: "PAYMENT_SUCCEEDED",
@@ -35,7 +35,13 @@ const paymentEventSchema = createSchema(
     },
     payloadHash: shortText({ required: true, max: 64, immutable: true }),
     payment: { ...ref("Payment", { required: true }), immutable: true },
-    order: { ...ref("Order", { required: true }), immutable: true },
+    payableType: {
+      type: String,
+      enum: Object.values(PaymentPayableType),
+      immutable: true,
+    },
+    order: { ...ref("Order"), immutable: true },
+    customOrder: { ...ref("CustomOrder"), immutable: true },
     providerReference: shortText({
       required: true,
       max: 100,
@@ -52,9 +58,35 @@ const paymentEventSchema = createSchema(
   { collection: "paymentEvents", privateFields: ["payloadHash"] },
 );
 
+paymentEventSchema.pre("validate", function validatePayableReference(next) {
+  const custom = this.payableType === PaymentPayableType.CUSTOM_ORDER;
+  if (custom) {
+    if (!this.customOrder)
+      this.invalidate(
+        "customOrder",
+        "CUSTOM_ORDER payment events require a custom order.",
+      );
+    if (this.order)
+      this.invalidate(
+        "order",
+        "CUSTOM_ORDER payment events cannot reference an order.",
+      );
+  } else {
+    if (!this.order)
+      this.invalidate("order", "ORDER payment events require an order.");
+    if (this.customOrder)
+      this.invalidate(
+        "customOrder",
+        "ORDER payment events cannot reference a custom order.",
+      );
+  }
+  next();
+});
+
 paymentEventSchema.index({ provider: 1, eventId: 1 }, { unique: true });
 paymentEventSchema.index({ payment: 1, occurredAt: -1 });
-paymentEventSchema.index({ order: 1, occurredAt: -1 });
+paymentEventSchema.index({ order: 1, occurredAt: -1 }, { sparse: true });
+paymentEventSchema.index({ customOrder: 1, occurredAt: -1 }, { sparse: true });
 paymentEventSchema.index({ status: 1, createdAt: 1 });
 
 export const PaymentEvent = registerModel("PaymentEvent", paymentEventSchema);

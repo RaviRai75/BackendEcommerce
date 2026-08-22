@@ -1,3 +1,11 @@
+import {
+  OrderFulfillmentAction,
+  OrderFulfillmentStatus,
+  OrderPaymentMethod,
+  OrderPaymentStatus,
+  OrderPlacementStatus,
+} from "./order.model.js";
+
 function valueOf(order) {
   return order.toObject ? order.toObject() : order;
 }
@@ -110,7 +118,62 @@ export function customerOrderListItem(order) {
   };
 }
 
-export function customerOrderDetail(order) {
+function customerTracking(order, shipment) {
+  const milestones = [];
+  if (order.paymentMethod === OrderPaymentMethod.COD && order.createdAt) {
+    milestones.push({ status: "ORDER_CONFIRMED", at: order.createdAt });
+  } else if (
+    order.paymentMethod === OrderPaymentMethod.PREPAID &&
+    order.paymentStatus === OrderPaymentStatus.PREPAID_CONFIRMED &&
+    order.paidAt
+  ) {
+    milestones.push({ status: "ORDER_CONFIRMED", at: order.paidAt });
+  }
+
+  for (const entry of order.statusHistory ?? []) {
+    if (
+      entry.domain === "FULFILLMENT" &&
+      [
+        OrderFulfillmentStatus.PROCESSING,
+        OrderFulfillmentStatus.PACKED,
+      ].includes(entry.status)
+    ) {
+      milestones.push({ status: entry.status, at: entry.at });
+    }
+  }
+
+  const tracking = shipment ? valueOf(shipment) : null;
+  for (const milestone of tracking?.milestones ?? []) {
+    milestones.push({ status: milestone.status, at: milestone.at });
+  }
+
+  const uniqueMilestones = new Map();
+  for (const milestone of milestones) {
+    if (!uniqueMilestones.has(milestone.status)) {
+      uniqueMilestones.set(milestone.status, milestone);
+    }
+  }
+
+  return {
+    status: order.fulfillmentStatus,
+    deliveredAt: order.deliveredAt ?? tracking?.deliveredAt ?? null,
+    milestones: [...uniqueMilestones.values()].sort(
+      (left, right) => new Date(left.at) - new Date(right.at),
+    ),
+    shipment: tracking
+      ? {
+          courier: tracking.courier,
+          trackingId: tracking.trackingId || tracking.awb,
+          status: tracking.status,
+          shippedAt: tracking.shippedAt ?? null,
+          outForDeliveryAt: tracking.outForDeliveryAt ?? null,
+          deliveredAt: tracking.deliveredAt ?? null,
+        }
+      : null,
+  };
+}
+
+export function customerOrderDetail(order, shipment = null) {
   const value = valueOf(order);
   return {
     orderNumber: value.orderNumber,
@@ -131,6 +194,7 @@ export function customerOrderDetail(order) {
     coupon: value.coupon
       ? { code: value.coupon.code, discountPaise: value.coupon.discountPaise }
       : null,
+    tracking: customerTracking(value, shipment),
     history: [...value.statusHistory]
       .sort((left, right) => new Date(left.at) - new Date(right.at))
       .map((entry) => ({
@@ -181,5 +245,156 @@ export function orderQuote({
       enabled: option.enabled,
       ...(option.enabled ? { pricing: receiptPricing(option.pricing) } : {}),
     })),
+  };
+}
+
+function populatedPerson(person, { includePhone = false } = {}) {
+  if (!person || typeof person !== "object" || !person.name) return null;
+  return {
+    id: String(person._id ?? person.id),
+    name: person.name,
+    email: person.email,
+    ...(includePhone ? { phone: person.phone ?? null } : {}),
+  };
+}
+
+function canStartProcessing(value) {
+  return (
+    value.placementStatus === OrderPlacementStatus.PLACED &&
+    value.fulfillmentStatus === OrderFulfillmentStatus.UNFULFILLED &&
+    ((value.paymentMethod === OrderPaymentMethod.COD &&
+      value.paymentStatus === OrderPaymentStatus.COD_DUE) ||
+      (value.paymentMethod === OrderPaymentMethod.PREPAID &&
+        value.paymentStatus === OrderPaymentStatus.PREPAID_CONFIRMED))
+  );
+}
+
+function canCancel(value) {
+  return (
+    value.placementStatus === OrderPlacementStatus.PLACED &&
+    [
+      OrderFulfillmentStatus.UNFULFILLED,
+      OrderFulfillmentStatus.PROCESSING,
+      OrderFulfillmentStatus.PACKED,
+    ].includes(value.fulfillmentStatus) &&
+    [OrderPaymentStatus.COD_DUE, OrderPaymentStatus.PREPAID_PENDING].includes(
+      value.paymentStatus,
+    )
+  );
+}
+
+export function availableOrderActions(order) {
+  const value = valueOf(order);
+  const actions = [];
+  if (canStartProcessing(value)) {
+    actions.push(OrderFulfillmentAction.START_PROCESSING);
+  } else if (value.placementStatus === OrderPlacementStatus.PLACED) {
+    if (value.fulfillmentStatus === OrderFulfillmentStatus.PROCESSING) {
+      actions.push(OrderFulfillmentAction.MARK_PACKED);
+    } else if (value.fulfillmentStatus === OrderFulfillmentStatus.PACKED) {
+      actions.push(OrderFulfillmentAction.RECORD_SHIPMENT);
+    } else if (value.fulfillmentStatus === OrderFulfillmentStatus.SHIPPED) {
+      actions.push(OrderFulfillmentAction.MARK_OUT_FOR_DELIVERY);
+    } else if (
+      value.fulfillmentStatus === OrderFulfillmentStatus.OUT_FOR_DELIVERY
+    ) {
+      actions.push(OrderFulfillmentAction.MARK_DELIVERED);
+    }
+  }
+  if (canCancel(value)) actions.push(OrderFulfillmentAction.CANCEL);
+  return actions;
+}
+
+function adminHistoryEntry(entry) {
+  return {
+    domain: entry.domain,
+    status: entry.status,
+    at: entry.at,
+    reason: entry.reason ?? null,
+    action: entry.action ?? null,
+    actor: populatedPerson(entry.actor),
+  };
+}
+
+function adminShipment(shipment) {
+  if (!shipment) return null;
+  const value = valueOf(shipment);
+  return {
+    direction: value.direction,
+    provider: value.adapter,
+    courier: value.courier,
+    awb: value.awb,
+    trackingId: value.trackingId,
+    shipmentId: value.shipmentId,
+    status: value.status,
+    recordedAt: value.recordedAt,
+    recordedBy: populatedPerson(value.recordedBy),
+    shippedAt: value.shippedAt,
+    outForDeliveryAt: value.outForDeliveryAt ?? null,
+    deliveredAt: value.deliveredAt ?? null,
+    milestones: [...(value.milestones ?? [])]
+      .sort((left, right) => new Date(left.at) - new Date(right.at))
+      .map((milestone) => ({
+        status: milestone.status,
+        at: milestone.at,
+        actor: populatedPerson(milestone.actor),
+      })),
+  };
+}
+
+export function adminOrderListItem(order) {
+  const value = valueOf(order);
+  return {
+    orderNumber: value.orderNumber,
+    version: value.__v,
+    placedAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    customer: populatedPerson(value.user),
+    fulfillmentStatus: value.fulfillmentStatus,
+    payment: {
+      status: value.paymentStatus,
+      method: value.paymentMethod,
+    },
+    itemCount: value.itemCount,
+    lineCount: value.items.length,
+    totalPaise: value.pricing.finalTotalPaise,
+  };
+}
+
+export function adminOrderDetail(order, shipment = null, exchanges = []) {
+  const value = valueOf(order);
+  return {
+    orderNumber: value.orderNumber,
+    version: value.__v,
+    customer: populatedPerson(value.user, { includePhone: true }),
+    placedAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    lifecycle: lifecycle(value),
+    payment: {
+      method: value.paymentMethod,
+      status: value.paymentStatus,
+      paidAt: value.paidAt ?? null,
+    },
+    itemCount: value.itemCount,
+    lineCount: value.items.length,
+    items: value.items.map(orderItem),
+    shippingAddress: shippingAddress(value.shippingAddress),
+    pricing: detailPricing(value.pricing),
+    coupon: value.coupon
+      ? { code: value.coupon.code, discountPaise: value.coupon.discountPaise }
+      : null,
+    deliveredAt: value.deliveredAt ?? null,
+    releasedAt: value.releasedAt ?? null,
+    releaseReason: value.releaseReason ?? null,
+    shipment: adminShipment(shipment),
+    history: [...value.statusHistory]
+      .sort((left, right) => new Date(left.at) - new Date(right.at))
+      .map(adminHistoryEntry),
+    relatedExchanges: exchanges.map((exchange) => ({
+      exchangeNumber: exchange.exchangeNumber,
+      status: exchange.status,
+      createdAt: exchange.createdAt,
+    })),
+    availableActions: availableOrderActions(value),
   };
 }

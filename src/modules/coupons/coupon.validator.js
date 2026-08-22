@@ -135,18 +135,32 @@ export const createCouponSchema = strictObject({
   status: writableShape.status.default(CouponStatus.DRAFT),
 }).superRefine(validateDiscount);
 
-export const updateCouponSchema = strictObject(
-  Object.fromEntries(
+export const updateCouponSchema = strictObject({
+  expectedRevision: z.coerce.number().int().min(0),
+  ...Object.fromEntries(
     Object.entries(writableShape).map(([key, schema]) => [
       key,
       schema.optional(),
     ]),
   ),
-)
+})
   .superRefine(validateUpdateDiscount)
-  .refine((value) => Object.keys(value).length > 0, {
-    message: "Provide at least one field to update.",
-  });
+  .refine(
+    (value) => Object.keys(value).some((key) => key !== "expectedRevision"),
+    {
+      message: "Provide at least one field to update.",
+    },
+  );
+
+export const customerOptionSearchSchema = strictObject({
+  q: searchTermSchema
+    .refine((value) => value.length >= 2, "Enter at least 2 characters.")
+    .optional(),
+  ids: uniqueIds.optional(),
+  limit: z.coerce.number().int().min(1).max(20).default(20),
+}).refine((value) => Boolean(value.q || value.ids?.length), {
+  message: "Provide a search term or selected customer IDs.",
+});
 
 export const adminCouponListQuerySchema = paginationSchema
   .extend({

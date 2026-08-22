@@ -16,6 +16,7 @@ import { authRoutes } from "../modules/auth/auth.routes.js";
 import { auditRoutes } from "../modules/system/audit.routes.js";
 import { categoryRoutes } from "../modules/categories/category.routes.js";
 import { collectionRoutes } from "../modules/collections/collection.routes.js";
+import { dashboardRoutes } from "../modules/dashboard/dashboard.routes.js";
 import { productRoutes } from "../modules/products/product.routes.js";
 import { wishlistRoutes } from "../modules/wishlist/wishlist.routes.js";
 import { cartRoutes } from "../modules/cart/cart.routes.js";
@@ -23,10 +24,18 @@ import { addressRoutes } from "../modules/addresses/address.routes.js";
 import { couponRoutes } from "../modules/coupons/coupon.routes.js";
 import { orderRoutes } from "../modules/orders/order.routes.js";
 import { exchangeRoutes } from "../modules/exchanges/exchange.routes.js";
+import { reviewRoutes } from "../modules/reviews/review.routes.js";
 import { paymentRoutes } from "../modules/payments/payment.routes.js";
 import { shippingRoutes } from "../modules/shipping/shipping.routes.js";
 import { settingsRoutes } from "../modules/settings/settings.routes.js";
+import { referralRoutes } from "../modules/referrals/referral.routes.js";
+import { contentRoutes } from "../modules/content/content.routes.js";
 import { mediaRoutes } from "../modules/media/media.routes.js";
+import { notificationRoutes } from "../modules/notifications/notification.routes.js";
+import { customizationRoutes } from "../modules/customization/customization.routes.js";
+import { sizeGuideRoutes } from "../modules/sizeGuides/sizeGuide.routes.js";
+import { socialShareRoutes } from "../modules/socialSharing/socialShare.routes.js";
+import { supportRoutes } from "../modules/support/support.routes.js";
 import { isProduction } from "../config/env.js";
 import { AppError } from "../utils/AppError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -43,8 +52,11 @@ apiRouter.use(authRoutes);
 apiRouter.use(categoryRoutes);
 apiRouter.use(collectionRoutes);
 apiRouter.use(productRoutes);
+apiRouter.use(socialShareRoutes);
 apiRouter.use(shippingRoutes);
 apiRouter.use(settingsRoutes);
+apiRouter.use(contentRoutes);
+apiRouter.use(sizeGuideRoutes);
 
 // PUBLIC + USER — public resolve and authenticated owner-only persistence.
 apiRouter.use(wishlistRoutes);
@@ -53,9 +65,15 @@ apiRouter.use(addressRoutes);
 apiRouter.use(couponRoutes);
 apiRouter.use(orderRoutes);
 apiRouter.use(exchangeRoutes);
+apiRouter.use(reviewRoutes);
 apiRouter.use(paymentRoutes);
+apiRouter.use(notificationRoutes);
+apiRouter.use(supportRoutes);
+apiRouter.use(customizationRoutes);
+apiRouter.use(referralRoutes);
 
-// ADMIN — signed uploads, provider verification, and safe deletion.
+// ADMIN — dashboard analytics and signed media operations.
+apiRouter.use(dashboardRoutes);
 apiRouter.use(mediaRoutes);
 
 // ADMIN

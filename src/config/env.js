@@ -9,6 +9,7 @@
  * that reads `process.env`. Nothing here is ever serialised into an API
  * response, and secret values are never logged.
  */
+import { createHash } from "node:crypto";
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 
@@ -32,6 +33,22 @@ const booleanish = z
 
 const positiveInt = (fallback) =>
   z.coerce.number().int().positive().default(fallback);
+
+const publicOrigin = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      !url.username &&
+      !url.password &&
+      (url.pathname === "/" || url.pathname === "") &&
+      !url.search &&
+      !url.hash
+    );
+  }, "must be an HTTP(S) origin without credentials, path, query, or fragment")
+  .transform((value) => new URL(value).origin);
 
 /**
  * A secret must be long enough to be meaningful. 32 characters is the minimum
@@ -67,21 +84,27 @@ const envSchema = z
     // --- Client / CORS ------------------------------------------------------
     /** Exact origins allowed to call the API. Never `*` (security §10). */
     CORS_ALLOWED_ORIGINS: csvList.default("http://localhost:5173"),
-    /** Public base URL of the storefront, used to build links in emails. */
-    STOREFRONT_URL: z.string().url().default("http://localhost:5173"),
+    /** Public storefront origin used for canonical customer-facing links. */
+    STOREFRONT_URL: publicOrigin.default("http://localhost:5173"),
 
-    // --- Email --------------------------------------------------------------
-    /**
-     * Which email adapter to use.
-     *   console — writes the message to the server log (development only)
-     *   none    — accepts and discards, so a missing provider never breaks a flow
-     * An SMTP/API adapter is added in Task 28.
-     */
-    EMAIL_PROVIDER: z.enum(["console", "none"]).default("console"),
+    // --- Email and notification dispatch ------------------------------------
+    EMAIL_PROVIDER: z.enum(["console", "none", "smtp"]).default("console"),
     EMAIL_FROM: z
       .string()
       .min(3)
       .default("Sanchandana <no-reply@sanchandana.local>"),
+    SMTP_HOST: z.string().trim().min(1).optional(),
+    SMTP_PORT: positiveInt(587),
+    SMTP_SECURE: booleanish.default("false"),
+    SMTP_USER: z.string().trim().min(1).optional(),
+    SMTP_APP_PASSWORD: z.string().min(8).optional(),
+    NOTIFICATION_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[a-fA-F0-9]{64}$/, "must be exactly 64 hexadecimal characters")
+      .optional(),
+    NOTIFICATION_ENCRYPTION_KEY_ID: z.string().trim().min(1).max(80).optional(),
+    NOTIFICATION_DISPATCH_BATCH_SIZE: positiveInt(100),
+    NOTIFICATION_LEASE_SECONDS: positiveInt(120),
 
     // --- Payments -----------------------------------------------------------
     /**
@@ -145,6 +168,22 @@ const envSchema = z
    * misconfigured deployment fails loudly instead of running insecurely.
    */
   .superRefine((value, ctx) => {
+    if (value.EMAIL_PROVIDER === "smtp") {
+      for (const [field, configured] of [
+        ["SMTP_HOST", value.SMTP_HOST],
+        ["SMTP_USER", value.SMTP_USER],
+        ["SMTP_APP_PASSWORD", value.SMTP_APP_PASSWORD],
+      ]) {
+        if (!configured) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `configure ${field} when EMAIL_PROVIDER=smtp`,
+          });
+        }
+      }
+    }
+
     if (value.NODE_ENV !== "production") return;
 
     if (value.CORS_ALLOWED_ORIGINS.some((origin) => origin === "*")) {
@@ -163,6 +202,14 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["CORS_ALLOWED_ORIGINS"],
         message: `production origins must use HTTPS (received "${insecureOrigin}")`,
+      });
+    }
+
+    if (!value.STOREFRONT_URL.startsWith("https://")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["STOREFRONT_URL"],
+        message: "production storefront origin must use HTTPS",
       });
     }
 
@@ -206,12 +253,28 @@ const envSchema = z
       });
     }
 
-    if (value.EMAIL_PROVIDER === "console") {
+    if (value.EMAIL_PROVIDER !== "smtp") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["EMAIL_PROVIDER"],
+        message: "production requires the SMTP email provider",
+      });
+    }
+
+    if (!value.NOTIFICATION_ENCRYPTION_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["NOTIFICATION_ENCRYPTION_KEY"],
         message:
-          "the console email adapter writes message bodies to the log and must not be used in production",
+          "production requires an explicit 32-byte notification encryption key",
+      });
+    }
+
+    if (!value.NOTIFICATION_ENCRYPTION_KEY_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["NOTIFICATION_ENCRYPTION_KEY_ID"],
+        message: "production requires a notification encryption key ID",
       });
     }
 
@@ -242,7 +305,25 @@ const envSchema = z
  * @throws {Error} with a human-readable list of every invalid variable
  */
 export function parseEnv(source = process.env) {
-  const result = envSchema.safeParse(source);
+  const normalizedSource = { ...source };
+  if (source.NODE_ENV === "production" && !source.STOREFRONT_URL?.trim()) {
+    const configuredOrigins = String(source.CORS_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (configuredOrigins.length === 1) {
+      try {
+        const candidate = new URL(configuredOrigins[0]);
+        if (["http:", "https:"].includes(candidate.protocol)) {
+          normalizedSource.STOREFRONT_URL = configuredOrigins[0];
+        }
+      } catch {
+        // Leave invalid CORS input to its dedicated production invariant.
+      }
+    }
+  }
+
+  const result = envSchema.safeParse(normalizedSource);
 
   if (!result.success) {
     const details = result.error.issues
@@ -257,11 +338,20 @@ export function parseEnv(source = process.env) {
     result.data.PREPAID_PROVIDER ??
     (result.data.NODE_ENV === "production" ? "DISABLED" : "MOCK_PREPAID");
   const mockSecret = result.data.MOCK_PREPAID_SECRET;
+  const notificationEncryptionKey =
+    result.data.NOTIFICATION_ENCRYPTION_KEY?.toLowerCase() ??
+    createHash("sha256")
+      .update(`${result.data.JWT_ACCESS_SECRET}:notification-envelope:v1`)
+      .digest("hex");
+  const notificationEncryptionKeyId =
+    result.data.NOTIFICATION_ENCRYPTION_KEY_ID ?? "nonproduction-derived-v1";
 
   return Object.freeze({
     ...result.data,
     PREPAID_PROVIDER: provider,
     MOCK_PREPAID_SECRET: mockSecret,
+    NOTIFICATION_ENCRYPTION_KEY: notificationEncryptionKey,
+    NOTIFICATION_ENCRYPTION_KEY_ID: notificationEncryptionKeyId,
   });
 }
 

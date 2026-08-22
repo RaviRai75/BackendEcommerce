@@ -1,11 +1,13 @@
 import { z } from "zod";
 import {
   idParamSchema,
+  objectIdSchema,
   paginationSchema,
   searchTermSchema,
   slugParamSchema,
   strictObject,
 } from "../../validators/common.js";
+import { customizationDefinitionValidator } from "../customization/customizationConfig.js";
 import { CategoryStatus } from "./category.model.js";
 
 const nameSchema = z.string().trim().min(2).max(100);
@@ -22,22 +24,29 @@ const categoryShape = {
   slug: slugSchema,
   description: optionalText(2000),
   seo: seoSchema,
+  customization: customizationDefinitionValidator.optional(),
+  sizeGuideId: objectIdSchema.nullable().optional(),
   sortOrder: z.coerce.number().int().min(0).max(100_000).optional(),
 };
 
 export const createCategorySchema = strictObject(categoryShape);
-export const updateCategorySchema = strictObject(
-  Object.fromEntries(
+export const updateCategorySchema = strictObject({
+  ...Object.fromEntries(
     Object.entries(categoryShape).map(([key, schema]) => [
       key,
       schema.optional(),
     ]),
   ),
-).refine((value) => Object.keys(value).length > 0, {
-  message: "Provide at least one field to update.",
-});
+  expectedRevision: z.coerce.number().int().min(0),
+}).refine(
+  (value) => Object.keys(value).some((key) => key !== "expectedRevision"),
+  {
+    message: "Provide at least one field to update.",
+  },
+);
 export const categoryStatusSchema = strictObject({
   status: z.enum(Object.values(CategoryStatus)),
+  expectedRevision: z.coerce.number().int().min(0),
 });
 export const adminCategoryListQuerySchema = paginationSchema
   .extend({

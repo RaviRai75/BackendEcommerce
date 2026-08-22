@@ -13,12 +13,13 @@
  *   - A password change invalidates every existing session       security §29
  *   - Reset tokens are short-lived, single-use, and hashed       security §1
  */
-import { Types } from "mongoose";
+import mongoose, { Types } from "mongoose";
 import { AppError } from "../../utils/AppError.js";
 import { ErrorCode } from "../../utils/errorCodes.js";
 import { createLogger } from "../../utils/logger.js";
-import { env } from "../../config/env.js";
-import { emailService } from "../../services/email/index.js";
+import { isProduction } from "../../config/env.js";
+import { supportsTransactions } from "../../config/database.js";
+import { notificationService } from "../notifications/notification.service.js";
 import {
   ACCOUNT_LOCK_MINUTES,
   MAX_FAILED_LOGIN_ATTEMPTS,
@@ -586,67 +587,139 @@ export const authService = {
    * @returns {Promise<{ token: string | null }>} the raw token, for internal use only
    */
   async requestPasswordReset(email, req) {
-    const user = await User.findOne({ email }).select(
-      "_id email name isActive",
-    );
-
-    if (!user || !user.isActive) {
-      log.info(
-        "password reset requested for an address with no active account",
-      );
-      return { token: null };
-    }
-
-    // Any earlier outstanding request is invalidated, so only the newest link
-    // works. Two live reset links for one account is twice the exposure.
-    await PasswordResetToken.updateMany(
-      { user: user._id, usedAt: { $exists: false } },
-      { $set: { usedAt: new Date() } },
-    );
-
-    const { token, tokenHash, expiresAt } = createPasswordResetToken();
+    let knownUserId = null;
+    let issuedToken = null;
+    const occurredAt = new Date();
     const context = requestContext(req);
 
-    await PasswordResetToken.create({
-      user: user._id,
-      tokenHash,
-      expiresAt,
-      requestedIp: context.ipAddress,
-      requestedUserAgent: context.userAgent,
-    });
+    const createResetIntent = async (session = null) => {
+      const sessionOptions = session ? { session } : {};
+      let userQuery = User.findOne({ email, isActive: true }).select(
+        "_id email name isActive passwordResetVersion",
+      );
+      if (session) userQuery = userQuery.session(session);
+      const user = await userQuery;
 
-    const resetUrl = `${env.STOREFRONT_URL}/reset-password#token=${encodeURIComponent(token)}`;
+      if (!user) {
+        log.info(
+          "password reset requested for an address with no active account",
+        );
+        return;
+      }
+      knownUserId = user._id.toString();
 
-    await emailService.send({
-      to: user.email,
-      subject: "Reset your Sanchandana password",
-      text: [
-        `Hello ${user.name},`,
-        "",
-        "We received a request to reset the password on your Sanchandana account.",
-        `Open this link to choose a new password: ${resetUrl}`,
-        "",
-        `The link expires in ${env.PASSWORD_RESET_TTL_MINUTES} minutes and can be used once.`,
-        "If you did not ask for this, you can ignore this email — nothing has changed.",
-      ].join("\n"),
-    });
+      const currentUser = await User.findOneAndUpdate(
+        { _id: user._id, isActive: true },
+        { $inc: { passwordResetVersion: 1 } },
+        { new: true, ...sessionOptions },
+      ).select("_id email name isActive passwordResetVersion");
+      if (!currentUser) return;
 
-    // Deliberately not logged: security §1 forbids reset tokens in logs.
-    log.info(
-      { userId: user._id.toString() },
-      "password reset email dispatched",
-    );
+      await PasswordResetToken.updateMany(
+        { user: currentUser._id, usedAt: { $exists: false } },
+        { $set: { usedAt: occurredAt } },
+        sessionOptions,
+      );
 
-    await auditService.record({
-      action: AuditAction.PASSWORD_RESET_REQUESTED,
-      actor: user,
-      targetType: AuditTargetType.USER,
-      targetId: user._id,
-      targetLabel: "Customer account",
-      req,
-    });
+      const { token, tokenHash, expiresAt } = createPasswordResetToken();
+      await PasswordResetToken.create(
+        [
+          {
+            user: currentUser._id,
+            tokenHash,
+            generation: currentUser.passwordResetVersion,
+            expiresAt,
+            requestedIp: context.ipAddress,
+            requestedUserAgent: context.userAgent,
+          },
+        ],
+        sessionOptions,
+      );
 
-    return { token };
+      await notificationService.queuePasswordReset(
+        {
+          user: currentUser,
+          token,
+          generation: currentUser.passwordResetVersion,
+          occurredAt,
+        },
+        { session },
+      );
+
+      const auditEntry = {
+        action: AuditAction.PASSWORD_RESET_REQUESTED,
+        actor: currentUser,
+        targetType: AuditTargetType.USER,
+        targetId: currentUser._id,
+        targetLabel: "Customer account",
+        req,
+      };
+      if (session) await auditService.recordStrict(auditEntry, session);
+      else await auditService.record(auditEntry);
+
+      issuedToken = token;
+    };
+
+    let session = null;
+    try {
+      if (await supportsTransactions()) {
+        session = await mongoose.startSession();
+        await session.withTransaction(() => createResetIntent(session), {
+          readConcern: { level: "snapshot" },
+          writeConcern: { w: "majority" },
+        });
+      } else {
+        if (isProduction) {
+          throw new Error(
+            "Password reset delivery requires transaction support.",
+          );
+        }
+        // Local/test standalone MongoDB cannot transact. The generation checks
+        // still fail closed; production is never allowed to use this fallback.
+        await createResetIntent();
+      }
+
+      if (knownUserId) {
+        log.info(
+          { userId: knownUserId },
+          "password reset delivery intent queued",
+        );
+      }
+      return { token: issuedToken };
+    } catch (error) {
+      // A nonproduction standalone fallback cannot roll back multiple documents.
+      // Fail closed by advancing the generation and spending any partial token.
+      if (knownUserId && !session) {
+        try {
+          await User.updateOne(
+            { _id: knownUserId },
+            { $inc: { passwordResetVersion: 1 } },
+          );
+          await PasswordResetToken.updateMany(
+            { user: knownUserId, usedAt: { $exists: false } },
+            { $set: { usedAt: new Date() } },
+          );
+        } catch {
+          // The original failure remains deliberately indistinguishable.
+        }
+      }
+
+      // The public forgot-password response must remain indistinguishable. Never
+      // include the email, token, encrypted envelope, or provider details here.
+      log.error(
+        {
+          ...(knownUserId ? { userId: knownUserId } : {}),
+          errorCode:
+            typeof error?.code === "string"
+              ? error.code.slice(0, 40)
+              : "RESET_INTENT_FAILED",
+        },
+        "password reset delivery intent could not be created",
+      );
+      return { token: null };
+    } finally {
+      await session?.endSession();
+    }
   },
 
   /**
@@ -662,11 +735,37 @@ export const authService = {
    * @param {import('express').Request} [req]
    */
   async resetPassword({ token, password }, req) {
-    // Conditional write makes one request the sole winner even when two reset
-    // submissions arrive at the same time.
+    const now = new Date();
+    const tokenHash = hashRefreshToken(token);
+    const candidate = await PasswordResetToken.findOne({
+      tokenHash,
+      usedAt: { $exists: false },
+      expiresAt: { $gt: now },
+    });
+
+    if (!candidate) {
+      log.warn("password reset attempted with an invalid or spent token");
+      throw new AppError(ErrorCode.INVALID_RESET_TOKEN);
+    }
+
+    const user = await User.findById(candidate.user).select(
+      "+passwordHash passwordResetVersion isActive",
+    );
+    if (
+      !user ||
+      !user.isActive ||
+      candidate.generation !== user.passwordResetVersion
+    ) {
+      throw new AppError(ErrorCode.INVALID_RESET_TOKEN);
+    }
+
+    // Conditional claim makes one request the sole winner even when two reset
+    // submissions race, and binds that claim to the current account generation.
     const record = await PasswordResetToken.findOneAndUpdate(
       {
-        tokenHash: hashRefreshToken(token),
+        _id: candidate._id,
+        tokenHash,
+        generation: user.passwordResetVersion,
         usedAt: { $exists: false },
         expiresAt: { $gt: new Date() },
       },
@@ -679,15 +778,14 @@ export const authService = {
       throw new AppError(ErrorCode.INVALID_RESET_TOKEN);
     }
 
-    const user = await User.findById(record.user).select("+passwordHash");
-    if (!user || !user.isActive) {
-      throw new AppError(ErrorCode.INVALID_RESET_TOKEN);
-    }
-
     const passwordHash = await hashPassword(password);
 
-    await User.updateOne(
-      { _id: user._id },
+    const passwordUpdate = await User.updateOne(
+      {
+        _id: user._id,
+        isActive: true,
+        passwordResetVersion: record.generation,
+      },
       {
         $set: {
           passwordHash,
@@ -695,8 +793,12 @@ export const authService = {
           failedLoginAttempts: 0,
         },
         $unset: { lockedUntil: 1 },
+        $inc: { passwordResetVersion: 1 },
       },
     );
+    if (passwordUpdate.modifiedCount !== 1) {
+      throw new AppError(ErrorCode.INVALID_RESET_TOKEN);
+    }
 
     await this.revokeAllSessions(
       user._id,

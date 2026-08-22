@@ -23,6 +23,10 @@ export const PaymentAttemptStatus = Object.freeze({
 });
 
 export const PaymentCurrency = Object.freeze({ INR: "INR" });
+export const PaymentPayableType = Object.freeze({
+  ORDER: "ORDER",
+  CUSTOM_ORDER: "CUSTOM_ORDER",
+});
 
 const historySchema = new mongoose.Schema(
   {
@@ -39,7 +43,13 @@ const historySchema = new mongoose.Schema(
 
 const paymentSchema = createSchema(
   {
-    order: { ...ref("Order", { required: true }), immutable: true },
+    payableType: {
+      type: String,
+      enum: Object.values(PaymentPayableType),
+      immutable: true,
+    },
+    order: { ...ref("Order"), immutable: true },
+    customOrder: { ...ref("CustomOrder"), immutable: true },
     user: { ...ref("User", { required: true }), immutable: true },
     provider: {
       type: String,
@@ -97,7 +107,33 @@ const paymentSchema = createSchema(
   },
 );
 
-paymentSchema.index({ order: 1 }, { unique: true });
+paymentSchema.pre("validate", function validatePayableReference(next) {
+  const custom = this.payableType === PaymentPayableType.CUSTOM_ORDER;
+  if (custom) {
+    if (!this.customOrder)
+      this.invalidate(
+        "customOrder",
+        "CUSTOM_ORDER payments require a custom order.",
+      );
+    if (this.order)
+      this.invalidate(
+        "order",
+        "CUSTOM_ORDER payments cannot reference an order.",
+      );
+  } else {
+    if (!this.order)
+      this.invalidate("order", "ORDER payments require an order.");
+    if (this.customOrder)
+      this.invalidate(
+        "customOrder",
+        "ORDER payments cannot reference a custom order.",
+      );
+  }
+  next();
+});
+
+paymentSchema.index({ order: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ customOrder: 1 }, { unique: true, sparse: true });
 paymentSchema.index({ provider: 1, merchantReference: 1 }, { unique: true });
 paymentSchema.index({ provider: 1, refundReference: 1 }, { unique: true });
 paymentSchema.index({ user: 1, idempotencyKeyHash: 1 }, { unique: true });
