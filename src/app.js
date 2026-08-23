@@ -4,13 +4,14 @@
  * Middleware order matters and is deliberate:
  *   1. trust proxy      — so `req.ip` is the real client behind the host's proxy
  *   2. security headers — before anything can produce a response
- *   3. CORS             — must run before routes, including preflight
- *   4. request id + log — so everything after it is traceable
- *   5. body parsing     — with hard size limits
- *   6. sanitisation     — strip Mongo operators before any handler sees input
- *   7. global limiter   — cheap rejection ahead of real work
- *   8. routes
- *   9. 404 then the error handler — always last
+ *   3. private admin cache policy — before CORS/body/rate-limit rejection
+ *   4. request id + log — so every rejection is traceable
+ *   5. CORS             — must run before routes, including preflight
+ *   6. body parsing     — with hard size limits
+ *   7. sanitisation     — strip Mongo operators before any handler sees input
+ *   8. global limiter   — cheap rejection ahead of real work
+ *   9. routes
+ *  10. 404 then the error handler — always last
  *
  * The app is exported without listening so tests can drive it in-process
  * (supertest) and `server.js` owns the lifecycle.
@@ -87,11 +88,30 @@ export function createApp() {
     next();
   });
 
-  app.use(cors(corsOptions));
-  app.use(compression());
+  const privateAdminPrefixes = [
+    `${env.API_PREFIX}/admin/products`,
+    `${env.API_PREFIX}/admin/categories`,
+    `${env.API_PREFIX}/admin/collections`,
+    `${env.API_PREFIX}/admin/media`,
+  ];
+  app.use((req, res, next) => {
+    const path = (req.originalUrl?.split("?", 1)[0] ?? "").toLowerCase();
+    if (
+      privateAdminPrefixes.some((configuredPrefix) => {
+        const prefix = configuredPrefix.toLowerCase();
+        return path === prefix || path.startsWith(`${prefix}/`);
+      })
+    ) {
+      res.set("Cache-Control", "private, no-store");
+    }
+    next();
+  });
 
   app.use(requestId);
   app.use(httpLogger);
+
+  app.use(cors(corsOptions));
+  app.use(compression());
 
   const jsonLimit = `${env.JSON_BODY_LIMIT_KB}kb`;
   const productCsvPreviewPath = `${env.API_PREFIX}/admin/products/imports/preview`;

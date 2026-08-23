@@ -15,6 +15,15 @@ import { sendError } from "../utils/response.js";
 import { logger } from "../utils/logger.js";
 import { isDevelopment } from "../config/env.js";
 
+const DATABASE_UNAVAILABLE_ERROR_NAMES = new Set([
+  "MongoNetworkError",
+  "MongoNetworkTimeoutError",
+  "MongoServerSelectionError",
+  "MongooseServerSelectionError",
+  "MongoTopologyClosedError",
+  "MongoNotConnectedError",
+]);
+
 /**
  * Flattens a ZodError into `{ field: message }`, which the frontend renders
  * inline against the offending input.
@@ -54,15 +63,10 @@ function normalise(error) {
     return new AppError(ErrorCode.PAYLOAD_TOO_LARGE);
   }
 
-  // Mongoose validation and cast failures. A CastError means the client sent an
-  // id (or other typed value) that cannot exist, so it is a 404/422, not a 500.
-  if (error?.name === "ValidationError" && error.errors) {
-    const fields = {};
-    for (const [field, detail] of Object.entries(error.errors)) {
-      fields[field] = detail.message;
-    }
-    return AppError.validation(fields);
-  }
+  // Persistence validation failures are internal invariant failures. Request
+  // validation is owned by Zod; arbitrary ODM messages may contain schema
+  // paths, rejected values, or validator implementation details, so they must
+  // follow the generic redacted-error path below.
   if (error?.name === "CastError") {
     return new AppError(ErrorCode.NOT_FOUND, {
       meta: { path: error.path, kind: error.kind },
@@ -76,6 +80,14 @@ function normalise(error) {
       status: 409,
       meta: { keyPattern: error.keyPattern },
     });
+  }
+
+  // A database that becomes unreachable after startup is a temporary service
+  // outage, not a customer mistake or an unspecified application failure.
+  // Keep this allowlist narrow so write conflicts and ambiguous transaction
+  // outcomes continue through their domain-owned reconciliation paths.
+  if (DATABASE_UNAVAILABLE_ERROR_NAMES.has(error?.name)) {
+    return new AppError(ErrorCode.SERVICE_UNAVAILABLE, { cause: error });
   }
 
   return null;

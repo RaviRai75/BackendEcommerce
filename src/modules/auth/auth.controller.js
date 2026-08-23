@@ -44,13 +44,13 @@ function completeAuthentication(
 
 /** POST /auth/register — PUBLIC */
 export const register = asyncHandler(async (req, res) => {
-  const result = await authService.register(req.body, req);
+  const result = await authService.register(req.body, req.serviceContext);
   sendCreated(res, completeAuthentication(res, result));
 });
 
 /** POST /auth/login — PUBLIC */
 export const login = asyncHandler(async (req, res) => {
-  const result = await authService.login(req.body, req);
+  const result = await authService.login(req.body, req.serviceContext);
   sendSuccess(res, completeAuthentication(res, result));
 });
 
@@ -64,7 +64,7 @@ export const login = asyncHandler(async (req, res) => {
 export const refresh = asyncHandler(async (req, res) => {
   const result = await authService.refresh(
     req.cookies?.[REFRESH_COOKIE_NAME],
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, completeAuthentication(res, result));
 });
@@ -93,7 +93,7 @@ export const logout = asyncHandler(async (req, res) => {
  */
 export const forgotPassword = asyncHandler(async (req, res) => {
   const startedAt = Date.now();
-  await authService.requestPasswordReset(req.body.email, req);
+  await authService.requestPasswordReset(req.body.email, req.serviceContext);
 
   // Equal bodies are not enough: returning immediately for an unknown address
   // creates an account-enumeration timing oracle. Keep both paths behind the
@@ -116,7 +116,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
  * deliberately left signed out and has to sign in with the new password.
  */
 export const resetPassword = asyncHandler(async (req, res) => {
-  await authService.resetPassword(req.body, req);
+  await authService.resetPassword(req.body, req.serviceContext);
 
   res.clearCookie(REFRESH_COOKIE_NAME, clearRefreshCookieOptions());
   res.clearCookie(CSRF_COOKIE_NAME, clearCsrfCookieOptions());
@@ -146,7 +146,7 @@ export const changePassword = asyncHandler(async (req, res) => {
       currentPassword: req.body.currentPassword,
       newPassword: req.body.newPassword,
     },
-    req,
+    req.serviceContext,
   );
 
   res.clearCookie(REFRESH_COOKIE_NAME, clearRefreshCookieOptions());
@@ -161,7 +161,7 @@ export const changePassword = asyncHandler(async (req, res) => {
 export const logoutAll = asyncHandler(async (req, res) => {
   const result = await authService.revokeAllSessions(req.user._id, undefined, {
     actor: req.user,
-    req,
+    req: req.serviceContext,
   });
 
   res.clearCookie(REFRESH_COOKIE_NAME, clearRefreshCookieOptions());

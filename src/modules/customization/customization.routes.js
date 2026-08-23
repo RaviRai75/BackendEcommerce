@@ -1,33 +1,17 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
+import { privateNoStore as privateCache } from "../../middleware/cachePolicy.js";
+import { requireIdempotencyKey as createIdempotencyKeyMiddleware } from "../../middleware/idempotencyKey.js";
 import {
   customizationLimiter,
   customizationMessageLimiter,
   paymentLimiter,
 } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
-import { AppError } from "../../utils/AppError.js";
 import * as controller from "./customization.controller.js";
 import * as schemas from "./customization.validator.js";
 
-const privateCache = (_req, res, next) => {
-  res.set("Cache-Control", "private, no-store");
-  next();
-};
-const requireKey = (req, _res, next) => {
-  const parsed = schemas.idempotencyKeySchema.safeParse(
-    req.get("Idempotency-Key"),
-  );
-  if (!parsed.success)
-    return next(
-      AppError.validation({
-        idempotencyKey:
-          "Provide a high-entropy Idempotency-Key of 32 to 200 printable characters.",
-      }),
-    );
-  req.idempotencyKey = parsed.data;
-  next();
-};
+const requireKey = createIdempotencyKeyMiddleware(schemas.idempotencyKeySchema);
 export const customizationRoutes = Router();
 customizationRoutes.use(
   [

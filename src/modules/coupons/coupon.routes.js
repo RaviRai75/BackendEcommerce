@@ -4,6 +4,7 @@ import {
   requireAdmin,
   requireAuth,
 } from "../../middleware/auth.js";
+import { privateNoStore as preventPrivateCaching } from "../../middleware/cachePolicy.js";
 import { couponLimiter } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
 import {
@@ -24,11 +25,6 @@ import {
 } from "./coupon.validator.js";
 
 export const couponRoutes = Router();
-
-function preventPrivateCaching(_req, res, next) {
-  res.set("Cache-Control", "private, no-store");
-  next();
-}
 
 couponRoutes.post(
   "/coupons/validate",

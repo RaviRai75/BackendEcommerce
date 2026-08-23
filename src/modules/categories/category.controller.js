@@ -29,19 +29,32 @@ export const getAdminCategory = asyncHandler(async (req, res) => {
 });
 
 export const createCategory = asyncHandler(async (req, res) => {
-  sendCreated(res, await categoryService.create(req.body, req.user, req));
+  sendCreated(
+    res,
+    await categoryService.create(req.body, req.user, req.serviceContext),
+  );
 });
 
 export const updateCategory = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await categoryService.update(req.params.id, req.body, req.user, req),
+    await categoryService.update(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
 export const setCategoryStatus = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await categoryService.setStatus(req.params.id, req.body, req.user, req),
+    await categoryService.setStatus(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });

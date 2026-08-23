@@ -19,6 +19,7 @@ import { collectionRoutes } from "../modules/collections/collection.routes.js";
 import { dashboardRoutes } from "../modules/dashboard/dashboard.routes.js";
 import { productRoutes } from "../modules/products/product.routes.js";
 import { wishlistRoutes } from "../modules/wishlist/wishlist.routes.js";
+import { recentlyViewedRoutes } from "../modules/recentlyViewed/recentlyViewed.routes.js";
 import { cartRoutes } from "../modules/cart/cart.routes.js";
 import { addressRoutes } from "../modules/addresses/address.routes.js";
 import { couponRoutes } from "../modules/coupons/coupon.routes.js";
@@ -60,6 +61,7 @@ apiRouter.use(sizeGuideRoutes);
 
 // PUBLIC + USER — public resolve and authenticated owner-only persistence.
 apiRouter.use(wishlistRoutes);
+apiRouter.use(recentlyViewedRoutes);
 apiRouter.use(cartRoutes);
 apiRouter.use(addressRoutes);
 apiRouter.use(couponRoutes);

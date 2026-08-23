@@ -52,6 +52,7 @@ const paymentEventSchema = createSchema(
       type: String,
       required: true,
       enum: Object.values(PaymentEventStatus),
+      immutable: true,
     },
     occurredAt: { type: Date, required: true, immutable: true },
   },
@@ -89,4 +90,31 @@ paymentEventSchema.index({ order: 1, occurredAt: -1 }, { sparse: true });
 paymentEventSchema.index({ customOrder: 1, occurredAt: -1 }, { sparse: true });
 paymentEventSchema.index({ status: 1, createdAt: 1 });
 
+function rejectPaymentEventMutation() {
+  throw new Error("Payment events are append-only.");
+}
+for (const operation of [
+  "updateOne",
+  "updateMany",
+  "findOneAndUpdate",
+  "findOneAndReplace",
+  "replaceOne",
+  "deleteOne",
+  "deleteMany",
+  "findOneAndDelete",
+]) {
+  paymentEventSchema.pre(operation, rejectPaymentEventMutation);
+}
+paymentEventSchema.pre(
+  "deleteOne",
+  { document: true, query: false },
+  rejectPaymentEventMutation,
+);
+paymentEventSchema.pre("save", function preventExistingPaymentEventSave() {
+  if (!this.isNew) rejectPaymentEventMutation();
+});
+
 export const PaymentEvent = registerModel("PaymentEvent", paymentEventSchema);
+PaymentEvent.bulkWrite = async function rejectPaymentEventBulkMutation() {
+  rejectPaymentEventMutation();
+};

@@ -222,10 +222,16 @@ schema.index({ orderNumber: 1 }, { unique: true });
 schema.index({ request: 1 }, { unique: true });
 schema.index({ owner: 1, acceptanceIdempotencyKeyHash: 1 }, { unique: true });
 schema.index({ owner: 1, createdAt: -1, _id: -1 });
+schema.index({ createdAt: -1, _id: -1 });
 schema.index({
   paymentStatus: 1,
   productionStatus: 1,
   fulfillmentStatus: 1,
   createdAt: -1,
+  _id: -1,
 });
+schema.index({ paymentStatus: 1, createdAt: -1, _id: -1 });
+schema.index({ productionStatus: 1, createdAt: -1, _id: -1 });
+schema.index({ fulfillmentStatus: 1, createdAt: -1, _id: -1 });
+schema.index({ completionStatus: 1, createdAt: -1, _id: -1 });
 export const CustomOrder = registerModel("CustomOrder", schema);

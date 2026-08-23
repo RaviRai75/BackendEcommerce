@@ -1,5 +1,6 @@
 import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
+import { requireIdempotencyKey as createIdempotencyKeyMiddleware } from "../../middleware/idempotencyKey.js";
 import { searchLimiter, uploadLimiter } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
 import { AppError } from "../../utils/AppError.js";
@@ -41,11 +42,6 @@ import {
   updateProductSchema,
 } from "./product.validator.js";
 
-function preventPrivateCaching(_req, res, next) {
-  res.set("Cache-Control", "private, no-store");
-  next();
-}
-
 function requireUtf8Csv(req, _res, next) {
   const contentType = req.get("content-type") ?? "";
   const [mediaType, ...parameters] = contentType.split(";");
@@ -74,39 +70,13 @@ const productCsvBody = express.raw({
   inflate: false,
 });
 
-function requireImportIdempotencyKey(req, _res, next) {
-  const parsed = productImportIdempotencyKeySchema.safeParse(
-    req.get("Idempotency-Key"),
-  );
-  if (!parsed.success) {
-    next(
-      AppError.validation({
-        idempotencyKey:
-          "Provide a high-entropy Idempotency-Key of 32 to 200 printable characters.",
-      }),
-    );
-    return;
-  }
-  req.idempotencyKey = parsed.data;
-  next();
-}
+const requireImportIdempotencyKey = createIdempotencyKeyMiddleware(
+  productImportIdempotencyKeySchema,
+);
 
-function requireStockAdjustmentIdempotencyKey(req, _res, next) {
-  const parsed = stockAdjustmentIdempotencyKeySchema.safeParse(
-    req.get("Idempotency-Key"),
-  );
-  if (!parsed.success) {
-    next(
-      AppError.validation({
-        idempotencyKey:
-          "Provide a high-entropy Idempotency-Key of 32 to 200 printable characters.",
-      }),
-    );
-    return;
-  }
-  req.idempotencyKey = parsed.data;
-  next();
-}
+const requireStockAdjustmentIdempotencyKey = createIdempotencyKeyMiddleware(
+  stockAdjustmentIdempotencyKeySchema,
+);
 
 export const productRoutes = Router();
 
@@ -136,7 +106,6 @@ productRoutes.get(
 // ADMIN
 productRoutes.post(
   "/admin/products/imports/preview",
-  preventPrivateCaching,
   requireAuth,
   requireAdmin,
   requireUtf8Csv,
@@ -146,14 +115,12 @@ productRoutes.post(
 );
 productRoutes.get(
   "/admin/products/export.csv",
-  preventPrivateCaching,
   requireAuth,
   requireAdmin,
   exportProductsCsv,
 );
 productRoutes.get(
   "/admin/products/imports/:id",
-  preventPrivateCaching,
   requireAuth,
   requireAdmin,
   validate({ params: productImportIdParamSchema }),
@@ -161,7 +128,6 @@ productRoutes.get(
 );
 productRoutes.post(
   "/admin/products/imports/:id/confirm",
-  preventPrivateCaching,
   requireAuth,
   requireAdmin,
   uploadLimiter,

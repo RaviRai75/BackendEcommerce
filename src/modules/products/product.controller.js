@@ -6,6 +6,7 @@ import {
 } from "../../utils/response.js";
 import { productInventoryService } from "./productInventory.service.js";
 import { productService } from "./product.service.js";
+import { recommendationService } from "./recommendation.service.js";
 
 export const listProductFacets = asyncHandler(async (_req, res) => {
   sendSuccess(res, await productService.listPublicFacets());
@@ -27,7 +28,7 @@ export const getProduct = asyncHandler(async (req, res) => {
 export const listRelatedProducts = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await productService.listRelated(req.params.slug, req.query.limit),
+    await recommendationService.listRelated(req.params.slug, req.query.limit),
   );
 });
 
@@ -49,33 +50,46 @@ export const getAdminProduct = asyncHandler(async (req, res) => {
 });
 
 export const createProduct = asyncHandler(async (req, res) => {
-  sendCreated(res, await productService.create(req.body, req.user, req));
+  sendCreated(
+    res,
+    await productService.create(req.body, req.user, req.serviceContext),
+  );
 });
 
 export const updateProduct = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await productService.update(req.params.id, req.body, req.user, req),
+    await productService.update(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
 export const setProductStatus = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await productService.setStatus(req.params.id, req.body, req.user, req),
+    await productService.setStatus(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
 export const adjustProductStock = asyncHandler(async (req, res) => {
-  sendCreated(
-    res,
-    await productInventoryService.adjustStock(
-      req.params.productId,
-      req.params.variantId,
-      req.body,
-      req.idempotencyKey,
-      req.user,
-      req,
-    ),
+  const result = await productInventoryService.adjustStock(
+    req.params.productId,
+    req.params.variantId,
+    req.body,
+    req.idempotencyKey,
+    req.user,
+    req.serviceContext,
   );
+  sendSuccess(res, result.transaction, {
+    status: result.replayed ? 200 : 201,
+  });
 });

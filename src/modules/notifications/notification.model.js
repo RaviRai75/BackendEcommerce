@@ -102,7 +102,7 @@ const notificationSchema = createSchema(
 
 notificationSchema.index({ dedupeKey: 1 }, { unique: true });
 notificationSchema.index({ owner: 1, createdAt: -1, _id: -1 });
-notificationSchema.index({ owner: 1, readAt: 1, createdAt: -1 });
+notificationSchema.index({ owner: 1, readAt: 1, createdAt: -1, _id: -1 });
 notificationSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 });
 
 export const Notification = registerModel("Notification", notificationSchema);

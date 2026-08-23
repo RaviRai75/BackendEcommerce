@@ -11,12 +11,36 @@ import pinoHttp from "pino-http";
 import { logger } from "../utils/logger.js";
 import { isProduction } from "../config/env.js";
 
+/**
+ * Projects the HTTP request into the transport-neutral metadata application
+ * services may retain for operation markers and audit entries.
+ */
+export function createServiceContext(req) {
+  return Object.freeze({
+    requestId: req.id,
+    // `id` is retained for existing operation-marker helpers while callers
+    // migrate to the explicit requestId name.
+    id: req.id,
+    ipAddress: req.ip?.slice(0, 45),
+    userAgent: req.get?.("user-agent")?.slice(0, 255),
+    method: req.method,
+    path: req.path?.slice(0, 255),
+  });
+}
+
 /** Attaches a request id to `req.id` and echoes it in `X-Request-Id`. */
 export function requestId(req, res, next) {
   const incoming = req.get("X-Request-Id");
   // Only trust an inbound id if it looks like an id — never reflect arbitrary
   // client input into a response header.
   req.id = /^[\w-]{8,64}$/.test(incoming ?? "") ? incoming : randomUUID();
+  Object.defineProperty(req, "serviceContext", {
+    configurable: false,
+    enumerable: false,
+    get() {
+      return createServiceContext(req);
+    },
+  });
   res.setHeader("X-Request-Id", req.id);
   next();
 }

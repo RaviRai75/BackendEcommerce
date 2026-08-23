@@ -7,7 +7,7 @@ export const initiatePayment = asyncHandler(async (req, res) => {
     req.user,
     req.params.orderId,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.payment, { status: result.replayed ? 200 : 201 });
 });
@@ -17,7 +17,7 @@ export const verifyPayment = asyncHandler(async (req, res) => {
     req.user,
     req.params.orderId,
     req.body,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.payment);
 });
@@ -28,7 +28,7 @@ export const handleMockPrepaidWebhook = asyncHandler(async (req, res) => {
     signature: req.mockWebhookAuth.signature,
     timestamp: req.mockWebhookAuth.timestamp,
     payload: req.body,
-    req,
+    context: req.serviceContext,
   });
   sendSuccess(res, { received: true });
 });

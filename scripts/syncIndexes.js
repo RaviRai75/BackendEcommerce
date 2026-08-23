@@ -31,6 +31,7 @@ import "../src/modules/products/product.model.js";
 import "../src/modules/products/adminInventoryTransaction.model.js";
 import "../src/modules/products/productImport.model.js";
 import "../src/modules/wishlist/wishlist.model.js";
+import "../src/modules/recentlyViewed/recentlyViewed.model.js";
 import "../src/modules/cart/cart.model.js";
 import "../src/modules/cart/abandonedCartEvent.model.js";
 import "../src/modules/addresses/address.model.js";

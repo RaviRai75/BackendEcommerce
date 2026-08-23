@@ -158,7 +158,7 @@ function geographyStages(field, limit) {
     {
       $group: {
         _id: normalizedValue,
-        label: { $first: trimmedValue },
+        label: { $min: trimmedValue },
         deliveredOrderCount: { $sum: 1 },
         deliveredOrderValuePaise: { $sum: "$pricing.finalTotalPaise" },
       },

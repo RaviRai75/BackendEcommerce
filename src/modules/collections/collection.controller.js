@@ -29,13 +29,21 @@ export const getAdminCollection = asyncHandler(async (req, res) => {
 });
 
 export const createCollection = asyncHandler(async (req, res) => {
-  sendCreated(res, await collectionService.create(req.body, req.user, req));
+  sendCreated(
+    res,
+    await collectionService.create(req.body, req.user, req.serviceContext),
+  );
 });
 
 export const updateCollection = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await collectionService.update(req.params.id, req.body, req.user, req),
+    await collectionService.update(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
@@ -46,7 +54,7 @@ export const setCollectionStatus = asyncHandler(async (req, res) => {
       req.params.id,
       req.body.status,
       req.user,
-      req,
+      req.serviceContext,
     ),
   );
 });

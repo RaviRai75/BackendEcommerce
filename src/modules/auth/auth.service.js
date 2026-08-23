@@ -147,6 +147,39 @@ async function issueSession({ user, context = {}, generation = 0 }) {
   return { accessToken, expiresInSeconds, refreshToken, session };
 }
 
+async function revokeSessionsAfterEpochBump(
+  userId,
+  reason,
+  { actor, req } = {},
+) {
+  const id = typeof userId === "string" ? new Types.ObjectId(userId) : userId;
+  const sessions = await Session.updateMany(
+    { user: id, revokedAt: { $exists: false } },
+    { $set: { revokedAt: new Date(), revokedReason: reason } },
+  );
+
+  log.info(
+    {
+      userId: id.toString(),
+      reason,
+      sessionsRevoked: sessions.modifiedCount,
+    },
+    "all sessions revoked",
+  );
+
+  await auditService.record({
+    action: AuditAction.SESSIONS_REVOKED,
+    actor: actor ?? id.toString(),
+    targetType: AuditTargetType.USER,
+    targetId: id,
+    targetLabel: "Customer sessions",
+    metadata: { reason, sessionsRevoked: sessions.modifiedCount },
+    req,
+  });
+
+  return { sessionsRevoked: sessions.modifiedCount };
+}
+
 export const authService = {
   /**
    * Registers a customer account.
@@ -407,15 +440,14 @@ export const authService = {
         throw new AppError(ErrorCode.SESSION_EXPIRED);
       }
 
-      // `replacedBy` marks a completed rotation. During the small interval after
-      // another request claims the token but before it links its replacement, a
-      // duplicate request is refused without revoking a replacement that does not
-      // exist yet. A later replay sees the link and triggers full reuse handling.
-      const isCompletedRotation =
-        existing.revokedReason === SessionRevocationReason.ROTATED &&
-        existing.replacedBy;
+      // Any ROTATED session is a replay, including the interval after another
+      // request claims the token but before it links the successor. Revoking all
+      // sessions bumps the security epoch; the winning request's post-insert
+      // epoch check then retires any successor before returning its raw token.
+      const isRotated =
+        existing.revokedReason === SessionRevocationReason.ROTATED;
 
-      if (isCompletedRotation) {
+      if (isRotated) {
         log.error(
           {
             userId: existing.user.toString(),
@@ -546,31 +578,7 @@ export const authService = {
     // and after successor creation; this ordering closes the cross-collection
     // race without requiring replica-set transactions.
     await User.updateOne({ _id: id }, { $inc: { tokenVersion: 1 } });
-    const sessions = await Session.updateMany(
-      { user: id, revokedAt: { $exists: false } },
-      { $set: { revokedAt: new Date(), revokedReason: reason } },
-    );
-
-    log.info(
-      {
-        userId: id.toString(),
-        reason,
-        sessionsRevoked: sessions.modifiedCount,
-      },
-      "all sessions revoked",
-    );
-
-    await auditService.record({
-      action: AuditAction.SESSIONS_REVOKED,
-      actor: actor ?? id.toString(),
-      targetType: AuditTargetType.USER,
-      targetId: id,
-      targetLabel: "Customer sessions",
-      metadata: { reason, sessionsRevoked: sessions.modifiedCount },
-      req,
-    });
-
-    return { sessionsRevoked: sessions.modifiedCount };
+    return revokeSessionsAfterEpochBump(id, reason, { actor, req });
   },
 
   /**
@@ -780,6 +788,9 @@ export const authService = {
 
     const passwordHash = await hashPassword(password);
 
+    // The password and authentication epoch commit in one user-document write.
+    // Even if the later session-row cleanup fails, every previously issued
+    // access and refresh credential is rejected immediately by tokenVersion.
     const passwordUpdate = await User.updateOne(
       {
         _id: user._id,
@@ -793,14 +804,14 @@ export const authService = {
           failedLoginAttempts: 0,
         },
         $unset: { lockedUntil: 1 },
-        $inc: { passwordResetVersion: 1 },
+        $inc: { passwordResetVersion: 1, tokenVersion: 1 },
       },
     );
     if (passwordUpdate.modifiedCount !== 1) {
       throw new AppError(ErrorCode.INVALID_RESET_TOKEN);
     }
 
-    await this.revokeAllSessions(
+    await revokeSessionsAfterEpochBump(
       user._id,
       SessionRevocationReason.PASSWORD_CHANGED,
       { actor: user, req },
@@ -854,17 +865,32 @@ export const authService = {
       });
     }
 
-    await User.updateOne(
-      { _id: user._id },
+    // Compare-and-set the credential and epoch together. A concurrent account
+    // security change wins rather than allowing this request to overwrite it,
+    // and old sessions become invalid in the same atomic document update.
+    const passwordHash = await hashPassword(newPassword);
+    const passwordUpdate = await User.updateOne(
+      {
+        _id: user._id,
+        isActive: true,
+        passwordHash: user.passwordHash,
+        tokenVersion: user.tokenVersion,
+      },
       {
         $set: {
-          passwordHash: await hashPassword(newPassword),
+          passwordHash,
           passwordChangedAt: new Date(),
         },
+        $inc: { tokenVersion: 1 },
       },
     );
+    if (passwordUpdate.modifiedCount !== 1) {
+      throw new AppError(ErrorCode.SESSION_EXPIRED, {
+        message: "Your account changed. Please sign in and try again.",
+      });
+    }
 
-    await this.revokeAllSessions(
+    await revokeSessionsAfterEpochBump(
       user._id,
       SessionRevocationReason.PASSWORD_CHANGED,
       { actor: user, req },

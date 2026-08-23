@@ -11,7 +11,7 @@ export const createSupportTicket = asyncHandler(async (req, res) => {
     req.user,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.ticket, { status: result.replayed ? 200 : 201 });
 });
@@ -43,7 +43,7 @@ export const replyToMySupportTicket = asyncHandler(async (req, res) => {
     req.params.ticketNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.message, { status: result.replayed ? 200 : 201 });
 });
@@ -77,7 +77,7 @@ export const replyAsSupport = asyncHandler(async (req, res) => {
     req.params.ticketNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.message, { status: result.replayed ? 200 : 201 });
 });
@@ -88,7 +88,7 @@ export const addInternalSupportNote = asyncHandler(async (req, res) => {
     req.params.ticketNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.message, { status: result.replayed ? 200 : 201 });
 });
@@ -100,7 +100,7 @@ export const performSupportAction = asyncHandler(async (req, res) => {
       req.user,
       req.params.ticketNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   );
 });
@@ -113,7 +113,11 @@ export const listSupportQuickReplies = asyncHandler(async (req, res) => {
 export const createSupportQuickReply = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await supportService.createQuickReply(req.user, req.body, req),
+    await supportService.createQuickReply(
+      req.user,
+      req.body,
+      req.serviceContext,
+    ),
     { status: 201 },
   );
 });
@@ -125,7 +129,7 @@ export const updateSupportQuickReply = asyncHandler(async (req, res) => {
       req.user,
       req.params.id,
       req.body,
-      req,
+      req.serviceContext,
     ),
   );
 });
@@ -135,7 +139,7 @@ export const deleteSupportQuickReply = asyncHandler(async (req, res) => {
     req.user,
     req.params.id,
     req.query,
-    req,
+    req.serviceContext,
   );
   sendNoContent(res);
 });

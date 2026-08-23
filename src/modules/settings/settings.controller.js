@@ -13,6 +13,6 @@ export const getAdminSettings = asyncHandler(async (_req, res) => {
 export const updateSettings = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await settingsService.update(req.body, req.user, req),
+    await settingsService.update(req.body, req.user, req.serviceContext),
   );
 });

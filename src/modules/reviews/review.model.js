@@ -128,6 +128,8 @@ const reviewSchema = createSchema(
 reviewSchema.index({ user: 1, product: 1 }, { unique: true });
 reviewSchema.index({ user: 1, idempotencyKeyHash: 1 }, { unique: true });
 reviewSchema.index({ user: 1, createdAt: -1, _id: -1 });
+reviewSchema.index({ createdAt: -1, _id: -1 });
+reviewSchema.index({ product: 1, createdAt: -1, _id: -1 });
 reviewSchema.index({ product: 1, status: 1, createdAt: -1, _id: -1 });
 reviewSchema.index({
   product: 1,

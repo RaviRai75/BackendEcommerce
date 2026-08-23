@@ -13,7 +13,7 @@ export const submitRequest = asyncHandler(async (req, res) => {
     req.user,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.request, { status: result.replayed ? 200 : 201 });
 });
@@ -42,7 +42,7 @@ export const customerReply = asyncHandler(async (req, res) => {
     req.params.requestNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
     { admin: false },
   );
   sendSuccess(res, result.message, { status: result.replayed ? 200 : 201 });
@@ -53,7 +53,7 @@ export const requestChanges = asyncHandler(async (req, res) => {
     req.params.requestNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.message, { status: result.replayed ? 200 : 201 });
 });
@@ -63,7 +63,7 @@ export const acceptQuote = asyncHandler(async (req, res) => {
     req.params.requestNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.order, { status: result.replayed ? 200 : 201 });
 });
@@ -73,7 +73,7 @@ export const supportHandoff = asyncHandler(async (req, res) => {
     req.params.requestNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.ticket, { status: result.replayed ? 200 : 201 });
 });
@@ -83,7 +83,11 @@ export const listProfiles = asyncHandler(async (req, res) =>
 export const createProfile = asyncHandler(async (req, res) =>
   sendCreated(
     res,
-    await customizationService.createProfile(req.user, req.body, req),
+    await customizationService.createProfile(
+      req.user,
+      req.body,
+      req.serviceContext,
+    ),
   ),
 );
 export const updateProfile = asyncHandler(async (req, res) =>
@@ -93,7 +97,7 @@ export const updateProfile = asyncHandler(async (req, res) =>
       req.user,
       req.params.id,
       req.body,
-      req,
+      req.serviceContext,
     ),
   ),
 );
@@ -102,7 +106,7 @@ export const deleteProfile = asyncHandler(async (req, res) => {
     req.user,
     req.params.id,
     req.query.expectedVersion,
-    req,
+    req.serviceContext,
   );
   sendNoContent(res);
 });
@@ -131,7 +135,7 @@ export const adminReply = asyncHandler(async (req, res) => {
     req.params.requestNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
     { admin: true },
   );
   sendSuccess(res, result.message, { status: result.replayed ? 200 : 201 });
@@ -142,7 +146,7 @@ export const internalNote = asyncHandler(async (req, res) => {
     req.params.requestNumber,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
     { admin: true, internal: true },
   );
   sendSuccess(res, result.message, { status: result.replayed ? 200 : 201 });
@@ -154,7 +158,7 @@ export const adminAction = asyncHandler(async (req, res) =>
       req.user,
       req.params.requestNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   ),
 );
@@ -165,7 +169,7 @@ export const prepareQuote = asyncHandler(async (req, res) =>
       req.user,
       req.params.requestNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   ),
 );
@@ -176,7 +180,7 @@ export const sendQuote = asyncHandler(async (req, res) =>
       req.user,
       req.params.requestNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   ),
 );
@@ -207,7 +211,7 @@ export const productionAction = asyncHandler(async (req, res) =>
       req.user,
       req.params.orderNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   ),
 );
@@ -218,7 +222,7 @@ export const fulfillmentAction = asyncHandler(async (req, res) =>
       req.user,
       req.params.orderNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   ),
 );
@@ -229,7 +233,7 @@ export const cancelOrder = asyncHandler(async (req, res) =>
       req.user,
       req.params.orderNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   ),
 );
@@ -238,7 +242,7 @@ export const initiateCustomPayment = asyncHandler(async (req, res) => {
     req.user,
     req.params.orderNumber,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.payment, { status: result.replayed ? 200 : 201 });
 });
@@ -247,7 +251,7 @@ export const verifyCustomPayment = asyncHandler(async (req, res) => {
     req.user,
     req.params.orderNumber,
     req.body,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.payment);
 });

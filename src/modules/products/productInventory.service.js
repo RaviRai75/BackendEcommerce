@@ -79,7 +79,7 @@ export const productInventoryService = {
     const keyHash = sha256(idempotencyKey);
     const requestFingerprint = fingerprint(productId, variantId, input);
     const replay = await replayFor(actor, keyHash, requestFingerprint);
-    if (replay) return replay;
+    if (replay) return { replayed: true, transaction: replay };
 
     if (!(await supportsTransactions())) {
       throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {
@@ -103,7 +103,9 @@ export const productInventoryService = {
             requestFingerprint,
             session,
           );
-          if (transactionReplay) return transactionReplay;
+          if (transactionReplay) {
+            return { replayed: true, transaction: transactionReplay };
+          }
 
           const product = await Product.findById(productId).session(session);
           if (!product) throw AppError.notFound("Product");
@@ -215,13 +217,16 @@ export const productInventoryService = {
             session,
           );
 
-          return transactionDto(transaction);
+          return {
+            replayed: false,
+            transaction: transactionDto(transaction),
+          };
         },
         { transactional: true },
       );
     } catch (error) {
       const committed = await replayFor(actor, keyHash, requestFingerprint);
-      if (committed) return committed;
+      if (committed) return { replayed: true, transaction: committed };
       throw error;
     }
   },

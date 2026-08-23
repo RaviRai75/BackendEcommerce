@@ -61,6 +61,30 @@ const secret = z
     "must be at least 32 characters — generate one with `openssl rand -hex 32`",
   );
 
+const notificationEncryptionKey = z
+  .string()
+  .regex(/^[a-fA-F0-9]{64}$/, "must be exactly 64 hexadecimal characters");
+
+const notificationEncryptionKeyId = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/,
+    "must use 1-80 letters, numbers, dots, underscores, or hyphens",
+  );
+
+const optionalNotificationEncryptionKey = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.trim().length === 0 ? undefined : value,
+  notificationEncryptionKey.optional(),
+);
+
+const optionalNotificationEncryptionKeyId = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.trim().length === 0 ? undefined : value,
+  notificationEncryptionKeyId.optional(),
+);
+
 const envSchema = z
   .object({
     NODE_ENV: z
@@ -98,11 +122,20 @@ const envSchema = z
     SMTP_SECURE: booleanish.default("false"),
     SMTP_USER: z.string().trim().min(1).optional(),
     SMTP_APP_PASSWORD: z.string().min(8).optional(),
-    NOTIFICATION_ENCRYPTION_KEY: z
-      .string()
-      .regex(/^[a-fA-F0-9]{64}$/, "must be exactly 64 hexadecimal characters")
-      .optional(),
-    NOTIFICATION_ENCRYPTION_KEY_ID: z.string().trim().min(1).max(80).optional(),
+    NOTIFICATION_ENCRYPTION_KEY: optionalNotificationEncryptionKey,
+    NOTIFICATION_ENCRYPTION_KEY_ID: optionalNotificationEncryptionKeyId,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_1:
+      optionalNotificationEncryptionKeyId,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_1: optionalNotificationEncryptionKey,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_2:
+      optionalNotificationEncryptionKeyId,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_2: optionalNotificationEncryptionKey,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_3:
+      optionalNotificationEncryptionKeyId,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_3: optionalNotificationEncryptionKey,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_4:
+      optionalNotificationEncryptionKeyId,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_4: optionalNotificationEncryptionKey,
     NOTIFICATION_DISPATCH_BATCH_SIZE: positiveInt(100),
     NOTIFICATION_LEASE_SECONDS: positiveInt(120),
 
@@ -181,6 +214,18 @@ const envSchema = z
             message: `configure ${field} when EMAIL_PROVIDER=smtp`,
           });
         }
+      }
+    }
+
+    for (let index = 1; index <= 4; index += 1) {
+      const idField = `NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_${index}`;
+      const keyField = `NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_${index}`;
+      if (Boolean(value[idField]) !== Boolean(value[keyField])) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [value[idField] ? keyField : idField],
+          message: `configure ${idField} and ${keyField} together`,
+        });
       }
     }
 
@@ -345,6 +390,40 @@ export function parseEnv(source = process.env) {
       .digest("hex");
   const notificationEncryptionKeyId =
     result.data.NOTIFICATION_ENCRYPTION_KEY_ID ?? "nonproduction-derived-v1";
+  const previousNotificationEncryptionKeys = Object.create(null);
+  const previousKeyMaterial = new Set();
+  for (let index = 1; index <= 4; index += 1) {
+    const id = result.data[`NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_${index}`];
+    const configuredKey =
+      result.data[`NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_${index}`];
+    if (!id || !configuredKey) continue;
+    const key = configuredKey.toLowerCase();
+
+    if (id === notificationEncryptionKeyId) {
+      throw new Error(
+        `Invalid environment configuration:\n  - NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_${index}: must not repeat the active notification key ID`,
+      );
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(
+        previousNotificationEncryptionKeys,
+        id,
+      )
+    ) {
+      throw new Error(
+        `Invalid environment configuration:\n  - NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_ID_${index}: previous notification key IDs must be distinct`,
+      );
+    }
+    if (key === notificationEncryptionKey || previousKeyMaterial.has(key)) {
+      throw new Error(
+        `Invalid environment configuration:\n  - NOTIFICATION_PREVIOUS_ENCRYPTION_KEY_${index}: notification key material must be distinct`,
+      );
+    }
+
+    previousNotificationEncryptionKeys[id] = key;
+    previousKeyMaterial.add(key);
+  }
+  Object.freeze(previousNotificationEncryptionKeys);
 
   return Object.freeze({
     ...result.data,
@@ -352,6 +431,7 @@ export function parseEnv(source = process.env) {
     MOCK_PREPAID_SECRET: mockSecret,
     NOTIFICATION_ENCRYPTION_KEY: notificationEncryptionKey,
     NOTIFICATION_ENCRYPTION_KEY_ID: notificationEncryptionKeyId,
+    NOTIFICATION_PREVIOUS_ENCRYPTION_KEYS: previousNotificationEncryptionKeys,
   });
 }
 

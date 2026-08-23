@@ -2,7 +2,13 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { env } from "../../config/env.js";
 
 const ALGORITHM = "aes-256-gcm";
-const key = Buffer.from(env.NOTIFICATION_ENCRYPTION_KEY, "hex");
+const activeKey = Buffer.from(env.NOTIFICATION_ENCRYPTION_KEY, "hex");
+const decryptionKeys = new Map([
+  [env.NOTIFICATION_ENCRYPTION_KEY_ID, activeKey],
+  ...Object.entries(env.NOTIFICATION_PREVIOUS_ENCRYPTION_KEYS).map(
+    ([keyId, key]) => [keyId, Buffer.from(key, "hex")],
+  ),
+]);
 
 function assertEnvelope(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -18,7 +24,7 @@ export function encryptEmailEnvelope(envelope) {
   }
 
   const iv = randomBytes(12);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const cipher = createCipheriv(ALGORITHM, activeKey, iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
 
   return {
@@ -30,13 +36,14 @@ export function encryptEmailEnvelope(envelope) {
 }
 
 export function decryptEmailEnvelope(delivery) {
-  if (delivery.keyId !== env.NOTIFICATION_ENCRYPTION_KEY_ID) {
+  const decryptionKey = decryptionKeys.get(delivery.keyId);
+  if (!decryptionKey) {
     const error = new Error("Unknown notification encryption key ID.");
     error.code = "UNKNOWN_KEY_ID";
     throw error;
   }
 
-  const decipher = createDecipheriv(ALGORITHM, key, delivery.iv);
+  const decipher = createDecipheriv(ALGORITHM, decryptionKey, delivery.iv);
   decipher.setAuthTag(delivery.authTag);
   const plaintext = Buffer.concat([
     decipher.update(delivery.ciphertext),

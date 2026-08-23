@@ -177,9 +177,7 @@ function targetUrl(target, templateKey) {
       NotificationType.ADMIN_PAYMENT_CONFIRMED,
     ].includes(templateKey)
   ) {
-    // The current admin order surface is the mounted management list; there is
-    // no mounted admin order-detail route yet.
-    return `${env.STOREFRONT_URL}/admin/orders`;
+    return `${env.STOREFRONT_URL}/admin/orders/${reference}`;
   }
   if (target.kind === "ORDER")
     return `${env.STOREFRONT_URL}/account/orders/${reference}`;

@@ -30,26 +30,44 @@ export const getAdminSizeGuide = asyncHandler(async (req, res) => {
 });
 
 export const createSizeGuide = asyncHandler(async (req, res) => {
-  sendCreated(res, await sizeGuideService.create(req.body, req.user, req));
+  sendCreated(
+    res,
+    await sizeGuideService.create(req.body, req.user, req.serviceContext),
+  );
 });
 
 export const saveSizeGuideDraft = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await sizeGuideService.saveDraft(req.params.id, req.body, req.user, req),
+    await sizeGuideService.saveDraft(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
 export const publishSizeGuide = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await sizeGuideService.publish(req.params.id, req.body, req.user, req),
+    await sizeGuideService.publish(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
 export const unpublishSizeGuide = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await sizeGuideService.unpublish(req.params.id, req.body, req.user, req),
+    await sizeGuideService.unpublish(
+      req.params.id,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });

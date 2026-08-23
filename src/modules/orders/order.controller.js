@@ -31,7 +31,7 @@ export const placeOrder = asyncHandler(async (req, res) => {
     req.user,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.receipt, { status: result.replayed ? 200 : 201 });
 });
@@ -52,7 +52,7 @@ export const performAdminOrderAction = asyncHandler(async (req, res) => {
       req.user,
       req.params.orderNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   );
 });

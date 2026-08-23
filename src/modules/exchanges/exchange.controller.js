@@ -15,7 +15,7 @@ export const createExchange = asyncHandler(async (req, res) => {
     req.user,
     req.body,
     req.idempotencyKey,
-    req,
+    req.serviceContext,
   );
   sendSuccess(res, result.exchange, { status: result.replayed ? 200 : 201 });
 });
@@ -48,7 +48,7 @@ export const performAdminExchangeAction = asyncHandler(async (req, res) => {
       req.user,
       req.params.exchangeNumber,
       req.body,
-      req,
+      req.serviceContext,
     ),
   );
 });

@@ -161,6 +161,13 @@ mediaAssetSchema.index({
   uploadedAt: 1,
   _id: 1,
 });
+mediaAssetSchema.index({ status: 1, issuedAt: 1, _id: 1 });
+mediaAssetSchema.index({
+  status: 1,
+  deletionReason: 1,
+  issuedAt: 1,
+  _id: 1,
+});
 mediaAssetSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 });
 
 export const MediaAsset = registerModel("MediaAsset", mediaAssetSchema);

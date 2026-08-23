@@ -854,3 +854,71 @@ The lifecycle deliberately has no `ABANDONED`, `REMINDER_DUE`, or `REMINDER_SENT
 **Why.** Cart mutations currently support standalone MongoDB and cannot be made dependent on a new cross-collection transaction without changing launch infrastructure. Returning an error after the cart already changed is worse than a missing non-financial projection; idempotent later activity repairs the current episode.
 
 **Cost.** A database failure can omit or delay an episode update. This architecture favors shopping correctness and explicit reconciliation over pretending analytics-style capture is transactional.
+
+## D69 — Task 37 composes existing owner-bound domains instead of creating an account aggregate
+
+**Decision.** The customer account remains a frontend hub over independently authorized domain APIs. It displays the existing public profile allowlist and links to saved addresses, orders, wishlist, recently viewed, exchanges, reviews, and notifications; the existing referral section remains visible only when the admin-owned referral program is enabled. Saved addresses receive a dedicated protected account page that reuses the canonical address API and its serviceability/default/limit rules. Wishlist links to the existing responsive wishlist rather than duplicating storage or business logic under `/account`. Past Order address snapshots remain immutable when a saved address changes or is removed.
+
+No broad “account details” endpoint joins profile, addresses, orders, behavioral data, or referrals into one cacheable payload. Every section keeps its existing owner checks, bounded DTO, private cache policy, lifecycle authority, and account-scoped client query state.
+
+**Why.** Most Task 37 capabilities already exist as secure modules. Composition closes the customer-experience gaps without introducing a high-value PII aggregate, inconsistent copies, or a second implementation of address/wishlist behavior.
+
+**Cost.** The account is assembled from several focused requests and customers navigate to dedicated sections rather than receiving one large dashboard response.
+
+## D70 — Recently viewed is an expiring convenience list, not an analytics history
+
+**Decision.** Recently viewed stores at most twenty unique Product identities ordered by most recent successful product-detail view. Authenticated customers have one owner-bound MongoDB document containing only Product IDs and server `viewedAt` timestamps. Entries older than thirty days are removed during reads/writes, and `purgeAt` plus a TTL index removes a document thirty days after its newest view. Guest storage uses one versioned localStorage record with the same twenty-item and thirty-day bounds and contains only Product ID and browser timestamp.
+
+Responses hydrate only currently public products through the canonical catalogue projection and omit unavailable identities. The store contains no customer contact data, search terms, referrer URL, route history, session/device identifier, dwell time, variant/size selection, cart state, consent, or message metadata. Recently viewed is not exported as an event stream and is not used for analytics, recommendations, abandoned-cart detection, notifications, email, WhatsApp, personalization scoring, or advertising.
+
+**Why.** Section 19 explicitly requires guest localStorage and authenticated MongoDB but calls only for “appropriate browsing information.” A bounded deduplicated list is sufficient to render the customer feature while minimizing behavioral data.
+
+**Cost.** The application keeps no long-term viewing history, cross-product frequency, or attribution data, and unavailable products disappear from the visible list.
+
+## D71 — Product-detail success is the only viewing signal, with deterministic privacy-safe merge
+
+**Decision.** A product is recorded only after its public detail has loaded successfully. List impressions, search results, recommendations, hovers, prefetches, failed/not-found details, account-page reads, and recently-viewed reads never record activity. Re-viewing a product moves it to the front and refreshes its timestamp. Guest writes are local and non-blocking; authenticated writes use an owner-derived endpoint and are also non-blocking for product display.
+
+When a guest signs in, the browser may merge its bounded Product ID order into the owner list. The server accepts IDs only—not browser timestamps—validates the bound, treats submitted guest order as most-recent first, appends unique existing identities, assigns server timestamps, and truncates to twenty. Local guest history is removed only after successful merge. Reads never advance timestamps. Customers may clear their recently viewed list; clear affects only this convenience projection and not Cart, Wishlist, Orders, audit data, or catalogue state.
+
+**Why.** Explicit detail success avoids fabricating interest from incidental rendering, while server timestamps and owner identity prevent the browser from supplying behavioral chronology or another customer’s owner ID. Deterministic merge preserves useful guest context without trusting unbounded client data.
+
+**Cost.** Guest and prior cross-device chronology cannot be perfectly interleaved; current-browser guest items intentionally precede existing account items after merge.
+
+## D72 — “See profile” grants visibility, not unspecified account mutation or deletion semantics
+
+**Decision.** Task 37 does not add profile editing, email/phone change, marketing preferences, self-service account deletion, review editing/deletion, referral rotation/redemption/rewards, notification preferences, or order/exchange history deletion. Profile remains the existing explicit public allowlist. Password and session controls remain the existing security workflows. Account deletion/request handling waits for approved legal retention, anonymization, identity-verification, and dependent-record rules; the conditional privacy requirement is not interpreted as permission to delete financial, fulfillment, payment, exchange, review, notification, referral, or audit records.
+
+**Why.** The requirement says customers should see these account areas but does not define mutation authority or legally required retention. Guessing those rules could enable account takeover, erase records that must be retained, or imply marketing consent and financial rewards that do not exist.
+
+**Cost.** Customers can manage saved addresses and clear recently viewed data, but other new account mutations require separate approved requirements.
+
+## D73 — Task 38 tracking is a fixed projection of authoritative milestones
+
+**Decision.** The customer Order detail renders exactly the required five-step sequence: `ORDER_CONFIRMED`, `PACKED`, `SHIPPED`, `OUT_FOR_DELIVERY`, and `DELIVERED`. Completion and timestamps come only from the existing owner-bound `tracking.milestones` projection. `PROCESSING` remains an authorized internal fulfillment/history state but is not inserted into the required customer sequence. COD confirmation is the accepted Order timestamp; prepaid confirmation exists only after trusted payment verification. Missing milestones remain pending and no browser state, current date, payment state, array position, or later milestone fabricates an earlier timestamp.
+
+Cancellation does not create a sixth timeline milestone or mark pending delivery steps complete. The page may continue to show previously recorded milestones alongside the separately authoritative cancelled status. When a forward shipment exists, the customer may see only the allowlisted courier, public tracking identifier, canonical status, and supplied timestamps already returned by the backend. It exposes no private shipment ID, actor, internal reason, audit/request marker, provider payload, arbitrary tracking URL, location trace, delivery estimate, split-shipment claim, RTO/loss state, or COD-remittance inference.
+
+**Why.** Task 38 prescribes a visual sequence, while D29 and D32 already define the trusted owner/privacy boundary and canonical fulfillment facts. Presenting that projection closes the UI gap without creating a second tracking authority or inventing carrier promises.
+
+**Cost.** An order with incomplete manual operations shows pending steps without estimates. `PROCESSING` remains visible only in recorded operational history, and customers receive no live map or carrier link.
+
+## D74 — Normal-order administration exposes only server-authorized explicit actions
+
+**Decision.** The existing `/admin/orders/:orderNumber` route is mounted as a private ADMIN workspace so operations can create the trusted milestones consumed by Task 38. The page reads the existing admin detail DTO and renders controls only for the server-returned `availableActions`. Every command sends the displayed `version` as `expectedVersion`; `RECORD_SHIPMENT` accepts only the existing bounded courier, AWB, public tracking ID, and private shipment ID fields, while `CANCEL` accepts only its bounded reason. There is no generic status selector, arbitrary timestamp, carrier URL, raw provider body, payment override, rollback, or hidden client-side transition rule.
+
+The canonical mutation response replaces the order cache. A stale/version conflict or uncertain error requires a fresh detail read and explicit administrator review; the browser does not silently replay a command against a newer version. Existing database-backed ADMIN authorization, strict validation, transaction requirement, audit, notification, stock/coupon release, shipment uniqueness, and ambiguous-commit reconciliation remain the authorities.
+
+**Why.** The backend already contains the closed fulfillment state machine but the missing frontend route makes it unusable without direct API calls. Driving controls from `availableActions` preserves server authority and allows the customer timeline to acquire real milestones.
+
+**Cost.** Operations must advance one order at a time and must reload after contention. Fulfillment remains unavailable on transactionless MongoDB and no bulk actions are introduced.
+
+## D75 — Shiprocket synchronization remains conditional and disconnected
+
+**Decision.** No Shiprocket credential, adapter, webhook, poller, scheduler, synchronization endpoint, or settings UI is added because Shiprocket is not connected. Manual provider-neutral shipment recording remains the approved implementation from D32 and satisfies Task 38's conditional wording. The UI never claims that displayed tracking is live or synchronized.
+
+A later connection must remain behind the shipping service/adapter boundary, keep credentials server-only, authenticate provider callbacks, persist replay identifiers and payload hashes, map only verified provider events into the closed Order/Shipment lifecycle, reject regressions and unsupported states, and perform provider I/O outside database transactions before an idempotent authoritative transition. It must define polling/webhook precedence, event retention, reconciliation, exception/RTO/loss handling, and operational ownership before activation.
+
+**Why.** A provider name is not an integration contract. Guessing authentication, signatures, event schemas, or status mappings could fabricate delivery facts, leak credentials, or repeat fulfillment side effects.
+
+**Cost.** Courier progress is entered manually and may lag Shiprocket until a verified adapter is separately approved and configured.

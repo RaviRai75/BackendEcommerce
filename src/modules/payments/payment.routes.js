@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { isProduction } from "../../config/env.js";
 import { requireAuth } from "../../middleware/auth.js";
+import { requireIdempotencyKey as createIdempotencyKeyMiddleware } from "../../middleware/idempotencyKey.js";
 import { paymentLimiter } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
-import { AppError } from "../../utils/AppError.js";
+import { paymentService } from "../../services/payment/index.js";
 import { idempotencyKeySchema } from "../orders/order.validator.js";
-import { mockPrepaidAdapter } from "../../services/payment/adapters/mockPrepaid.adapter.js";
 import {
   handleMockPrepaidWebhook,
   initiatePayment,
@@ -18,24 +18,12 @@ import {
   verifyPaymentSchema,
 } from "./payment.validator.js";
 
-function requireIdempotencyKey(req, _res, next) {
-  const parsed = idempotencyKeySchema.safeParse(req.get("Idempotency-Key"));
-  if (!parsed.success) {
-    next(
-      AppError.validation({
-        idempotencyKey:
-          "Provide a high-entropy Idempotency-Key of 32 to 200 printable characters.",
-      }),
-    );
-    return;
-  }
-  req.idempotencyKey = parsed.data;
-  next();
-}
+const requireIdempotencyKey =
+  createIdempotencyKeyMiddleware(idempotencyKeySchema);
 
 function authenticateMockWebhook(req, _res, next) {
   try {
-    req.mockWebhookAuth = mockPrepaidAdapter.verifyWebhookSignature(
+    req.mockWebhookAuth = paymentService.authenticateMockWebhook(
       req.rawPaymentWebhookBody,
       req.get("x-mock-signature"),
       req.get("x-mock-timestamp"),

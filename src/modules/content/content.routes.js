@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
+import { privateNoStore as preventPrivateCaching } from "../../middleware/cachePolicy.js";
 import { validate } from "../../middleware/validate.js";
 import {
   getAdminBusinessProfile,
@@ -25,11 +26,6 @@ import {
   unpublishContentSchema,
 } from "./content.validator.js";
 
-function preventPrivateCaching(_req, res, next) {
-  res.set("Cache-Control", "private, no-store");
-  next();
-}
-
 export const contentRoutes = Router();
 
 // PUBLIC — published snapshots and current operational projections only.
@@ -39,14 +35,8 @@ contentRoutes.get(
   getPublicContentPage,
 );
 contentRoutes.get("/content/business-profile", getPublicBusinessProfile);
-contentRoutes.get(
-  "/content/operational-policies/delivery",
-  getDeliveryPolicy,
-);
-contentRoutes.get(
-  "/content/operational-policies/exchange",
-  getExchangePolicy,
-);
+contentRoutes.get("/content/operational-policies/delivery", getDeliveryPolicy);
+contentRoutes.get("/content/operational-policies/exchange", getExchangePolicy);
 
 // ADMIN — all responses, including authentication and validation failures, are private.
 contentRoutes.use(
@@ -76,14 +66,14 @@ contentRoutes.post(
 );
 contentRoutes.post(
   "/admin/content/pages/:key/unpublish",
-  validate({ params: contentPageKeyParamsSchema, body: unpublishContentSchema }),
+  validate({
+    params: contentPageKeyParamsSchema,
+    body: unpublishContentSchema,
+  }),
   unpublishAdminContentPage,
 );
 
-contentRoutes.get(
-  "/admin/content/business-profile",
-  getAdminBusinessProfile,
-);
+contentRoutes.get("/admin/content/business-profile", getAdminBusinessProfile);
 contentRoutes.put(
   "/admin/content/business-profile/draft",
   validate({ body: saveBusinessProfileDraftSchema }),

@@ -1105,7 +1105,21 @@ async function verifyCustom(actor, orderNumber, input, req) {
   };
 }
 
-async function handleWebhook({ rawBody, signature, timestamp, payload, req }) {
+function authenticateMockWebhook(rawBody, signature, timestamp) {
+  return mockPrepaidAdapter.verifyWebhookSignature(
+    rawBody,
+    signature,
+    timestamp,
+  );
+}
+
+async function handleWebhook({
+  rawBody,
+  signature,
+  timestamp,
+  payload,
+  context,
+}) {
   const adapter = mockPrepaidAdapter;
   const result = await adapter.handleWebhook({
     rawBody,
@@ -1118,7 +1132,9 @@ async function handleWebhook({ rawBody, signature, timestamp, payload, req }) {
     merchantReference: result.merchantReference,
   });
   if (!payment) throw verificationFailed();
-  const applied = await applyProviderEvent(payment._id, result, { req });
+  const applied = await applyProviderEvent(payment._id, result, {
+    req: context,
+  });
   if (refundNeedsDispatch(applied.payment))
     applied.payment = await dispatchRefund(applied.payment, applied.order);
   return { replayed: applied.replayed, outcome: applied.outcome };
@@ -1142,6 +1158,7 @@ export const paymentService = Object.freeze({
   initiateCustom,
   verify,
   verifyCustom,
+  authenticateMockWebhook,
   handleWebhook,
   refund,
 });

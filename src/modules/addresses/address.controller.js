@@ -1,5 +1,9 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
-import { sendCreated, sendNoContent, sendSuccess } from "../../utils/response.js";
+import {
+  sendCreated,
+  sendNoContent,
+  sendSuccess,
+} from "../../utils/response.js";
 import { addressService } from "./address.service.js";
 
 export const listAddresses = asyncHandler(async (req, res) => {
@@ -7,17 +11,25 @@ export const listAddresses = asyncHandler(async (req, res) => {
 });
 
 export const createAddress = asyncHandler(async (req, res) => {
-  sendCreated(res, await addressService.create(req.user, req.body, req));
+  sendCreated(
+    res,
+    await addressService.create(req.user, req.body, req.serviceContext),
+  );
 });
 
 export const updateAddress = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await addressService.update(req.user, req.params.id, req.body, req),
+    await addressService.update(
+      req.user,
+      req.params.id,
+      req.body,
+      req.serviceContext,
+    ),
   );
 });
 
 export const deleteAddress = asyncHandler(async (req, res) => {
-  await addressService.remove(req.user, req.params.id, req);
+  await addressService.remove(req.user, req.params.id, req.serviceContext);
   sendNoContent(res);
 });

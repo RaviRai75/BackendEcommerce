@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
+import { privateNoStore as preventPrivateCaching } from "../../middleware/cachePolicy.js";
 import { validate } from "../../middleware/validate.js";
 import {
   createSizeGuide,
@@ -21,11 +22,6 @@ import {
   sizeGuideSlugParamSchema,
   unpublishSizeGuideSchema,
 } from "./sizeGuide.validator.js";
-
-function preventPrivateCaching(_req, res, next) {
-  res.set("Cache-Control", "private, no-store");
-  next();
-}
 
 export const sizeGuideRoutes = Router();
 

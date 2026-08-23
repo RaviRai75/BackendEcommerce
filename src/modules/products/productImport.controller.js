@@ -20,7 +20,7 @@ export const confirmProductImport = asyncHandler(async (req, res) => {
       req.params.id,
       req.idempotencyKey,
       req.user,
-      req,
+      req.serviceContext,
     ),
   );
 });
@@ -52,7 +52,10 @@ function writeWithBackpressure(res, chunk) {
 }
 
 export const exportProductsCsv = asyncHandler(async (req, res) => {
-  const prepared = await productImportService.prepareExport(req.user, req);
+  const prepared = await productImportService.prepareExport(
+    req.user,
+    req.serviceContext,
+  );
   try {
     res.status(200);
     res.set({

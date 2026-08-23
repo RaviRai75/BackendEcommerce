@@ -277,7 +277,11 @@ const schema = createSchema(
 schema.index({ requestNumber: 1 }, { unique: true });
 schema.index({ owner: 1, creationIdempotencyKeyHash: 1 }, { unique: true });
 schema.index({ owner: 1, createdAt: -1, _id: -1 });
+schema.index({ createdAt: -1, _id: -1 });
 schema.index({ status: 1, priority: 1, createdAt: -1, _id: -1 });
-schema.index({ "category.id": 1, createdAt: -1 });
+schema.index({ status: 1, createdAt: -1, _id: -1 });
+schema.index({ priority: 1, createdAt: -1, _id: -1 });
+schema.index({ type: 1, createdAt: -1, _id: -1 });
+schema.index({ "category.id": 1, createdAt: -1, _id: -1 });
 schema.index({ "references.assetId": 1 });
 export const CustomRequest = registerModel("CustomRequest", schema);

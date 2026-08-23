@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import mongoose from "mongoose";
+import {
+  isTransactionSupportError,
+  runMongoTransaction,
+} from "../../utils/transaction.js";
 import { supportsTransactions } from "../../config/database.js";
 import { AppError } from "../../utils/AppError.js";
 import { ErrorCode } from "../../utils/errorCodes.js";
@@ -31,12 +34,7 @@ import {
 } from "./order.model.js";
 import { releaseOrderResources } from "./orderRelease.service.js";
 
-const MAX_TRANSACTION_ATTEMPTS = 5;
-const MAX_COMMIT_ATTEMPTS = 5;
-const MAX_RECONCILIATION_ATTEMPTS = 3;
 const MAX_DETAIL_READ_ATTEMPTS = 3;
-const wait = (milliseconds) =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const AUDIT_ACTION_FOR = Object.freeze({
   [OrderFulfillmentAction.START_PROCESSING]: AuditAction.ORDER_STATUS_CHANGED,
@@ -118,110 +116,14 @@ function transactionAmbiguous(cause) {
   });
 }
 
-function hasErrorLabel(error, label) {
-  return (
-    Boolean(error?.hasErrorLabel?.(label)) ||
-    error?.errorLabels?.includes?.(label) === true
-  );
-}
+const transactionSupportError = isTransactionSupportError;
 
-function retryableTransactionError(error) {
-  return (
-    hasErrorLabel(error, "TransientTransactionError") || error?.code === 112
-  );
-}
-
-function unknownCommitResult(error) {
-  return hasErrorLabel(error, "UnknownTransactionCommitResult");
-}
-
-function transactionSupportError(error) {
-  return (
-    error?.code === 20 ||
-    error?.codeName === "IllegalOperation" ||
-    /transaction numbers are only allowed|does not support transactions/i.test(
-      error?.message ?? "",
-    )
-  );
-}
-
-async function transactionAttempt(work) {
-  const session = await mongoose.startSession();
-  let sawUnknownCommit = false;
-  let result;
-
-  try {
-    session.startTransaction({
-      readConcern: { level: "snapshot" },
-      writeConcern: { w: "majority" },
-    });
-    result = await work(session);
-
-    for (let attempt = 1; attempt <= MAX_COMMIT_ATTEMPTS; attempt += 1) {
-      try {
-        await session.commitTransaction();
-        return { outcome: "committed", result };
-      } catch (error) {
-        if (unknownCommitResult(error)) {
-          sawUnknownCommit = true;
-          if (attempt < MAX_COMMIT_ATTEMPTS) {
-            await wait(25 * attempt);
-            continue;
-          }
-          return { outcome: "ambiguous", result, error };
-        }
-        if (sawUnknownCommit) {
-          return { outcome: "ambiguous", result, error };
-        }
-        throw error;
-      }
-    }
-  } catch (error) {
-    if (sawUnknownCommit) {
-      return { outcome: "ambiguous", result, error };
-    }
-    if (session.inTransaction()) {
-      await session.abortTransaction().catch(() => {});
-    }
-    return {
-      outcome: retryableTransactionError(error) ? "retry" : "failed",
-      error,
-    };
-  } finally {
-    await session.endSession();
-  }
-
-  return { outcome: "failed", error: new Error("Transaction did not finish.") };
-}
-
-async function reconcileCommit(reconcile) {
-  for (let attempt = 1; attempt <= MAX_RECONCILIATION_ATTEMPTS; attempt += 1) {
-    try {
-      if (await reconcile()) return true;
-    } catch {
-      // A failed majority read cannot prove that the transaction did not commit.
-    }
-    if (attempt < MAX_RECONCILIATION_ATTEMPTS) await wait(50 * attempt);
-  }
-  return false;
-}
-
-async function runTransaction(work, reconcile) {
-  let lastError;
-  for (let attempt = 1; attempt <= MAX_TRANSACTION_ATTEMPTS; attempt += 1) {
-    const transaction = await transactionAttempt(work);
-    if (transaction.outcome === "committed") return transaction.result;
-    if (transaction.outcome === "ambiguous") {
-      if (await reconcileCommit(reconcile)) return transaction.result;
-      throw transactionAmbiguous(transaction.error);
-    }
-    if (transaction.outcome === "failed") throw transaction.error;
-
-    lastError = transaction.error;
-    if (attempt === MAX_TRANSACTION_ATTEMPTS) throw transaction.error;
-    await wait(25 * attempt);
-  }
-  throw lastError;
+function runTransaction(work, reconcile) {
+  return runMongoTransaction({
+    work,
+    reconcile,
+    ambiguousError: transactionAmbiguous,
+  });
 }
 
 function internalRequestId(req) {

@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
+import { privateNoStore as preventPrivateCaching } from "../../middleware/cachePolicy.js";
+import { requireIdempotencyKey as createIdempotencyKeyMiddleware } from "../../middleware/idempotencyKey.js";
 import {
   supportCreateLimiter,
   supportMessageLimiter,
 } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
-import { AppError } from "../../utils/AppError.js";
 import {
   addInternalSupportNote,
   createSupportQuickReply,
@@ -42,25 +43,8 @@ import {
   updateQuickReplySchema,
 } from "./support.validator.js";
 
-function preventPrivateCaching(_req, res, next) {
-  res.set("Cache-Control", "private, no-store");
-  next();
-}
-
-function requireIdempotencyKey(req, _res, next) {
-  const parsed = idempotencyKeySchema.safeParse(req.get("Idempotency-Key"));
-  if (!parsed.success) {
-    next(
-      AppError.validation({
-        idempotencyKey:
-          "Provide a high-entropy Idempotency-Key of 32 to 200 printable characters.",
-      }),
-    );
-    return;
-  }
-  req.idempotencyKey = parsed.data;
-  next();
-}
+const requireIdempotencyKey =
+  createIdempotencyKeyMiddleware(idempotencyKeySchema);
 
 export const supportRoutes = Router();
 

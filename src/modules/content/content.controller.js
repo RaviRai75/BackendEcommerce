@@ -9,7 +9,9 @@ function etagMatches(header, etag) {
   if (!header) return false;
   return header.split(",").some((candidate) => {
     const value = candidate.trim();
-    return value === "*" || value === etag || value.replace(/^W\//, "") === etag;
+    return (
+      value === "*" || value === etag || value.replace(/^W\//, "") === etag
+    );
   });
 }
 
@@ -53,7 +55,7 @@ export const saveAdminContentPageDraft = asyncHandler(async (req, res) => {
       req.params.key,
       req.body,
       req.user,
-      req,
+      req.serviceContext,
     ),
   );
 });
@@ -61,7 +63,12 @@ export const saveAdminContentPageDraft = asyncHandler(async (req, res) => {
 export const publishAdminContentPage = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await contentService.publishPage(req.params.key, req.body, req.user, req),
+    await contentService.publishPage(
+      req.params.key,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
@@ -72,7 +79,7 @@ export const unpublishAdminContentPage = asyncHandler(async (req, res) => {
       req.params.key,
       req.body,
       req.user,
-      req,
+      req.serviceContext,
     ),
   );
 });
@@ -84,20 +91,32 @@ export const getAdminBusinessProfile = asyncHandler(async (_req, res) => {
 export const saveAdminBusinessProfileDraft = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await contentService.saveBusinessProfileDraft(req.body, req.user, req),
+    await contentService.saveBusinessProfileDraft(
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
 export const publishAdminBusinessProfile = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await contentService.publishBusinessProfile(req.body, req.user, req),
+    await contentService.publishBusinessProfile(
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
 
 export const unpublishAdminBusinessProfile = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await contentService.unpublishBusinessProfile(req.body, req.user, req),
+    await contentService.unpublishBusinessProfile(
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });

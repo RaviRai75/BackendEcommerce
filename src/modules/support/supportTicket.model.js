@@ -181,6 +181,9 @@ supportTicketSchema.index({
   "activity.lastPublicMessageAt": -1,
   _id: -1,
 });
+supportTicketSchema.index({ updatedAt: -1, _id: -1 });
+supportTicketSchema.index({ status: 1, updatedAt: -1, _id: -1 });
+supportTicketSchema.index({ priority: 1, updatedAt: -1, _id: -1 });
 supportTicketSchema.index({ status: 1, priority: 1, updatedAt: -1, _id: -1 });
 supportTicketSchema.index({ category: 1, updatedAt: -1, _id: -1 });
 supportTicketSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 });

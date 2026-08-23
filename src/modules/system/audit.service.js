@@ -60,20 +60,23 @@ export function scrubMetadata(value, depth = 0) {
 }
 
 /**
- * Pulls the request context §25 asks for, without collecting more than needed.
+ * Normalizes a transport-neutral service context. Full Express requests remain
+ * accepted for middleware-originated audit events during the boundary migration.
  *
- * @param {import('express').Request} [req]
+ * @param {object} [context]
  */
-function contextFromRequest(req) {
-  if (!req) return {};
+function normalizeContext(context) {
+  if (!context) return {};
   return {
-    requestId: req.id,
-    ipAddress: req.ip?.slice(0, 45),
-    userAgent: req.get?.("user-agent")?.slice(0, 255),
-    method: req.method,
-    // `originalUrl` includes the query string, which can carry a reset token.
-    // The path alone is what is useful and what is safe.
-    path: req.path?.slice(0, 255),
+    requestId: context.requestId ?? context.id,
+    ipAddress: (context.ipAddress ?? context.ip)?.slice?.(0, 45),
+    userAgent: (context.userAgent ?? context.get?.("user-agent"))?.slice?.(
+      0,
+      255,
+    ),
+    method: context.method,
+    // `originalUrl` is deliberately ignored because its query can carry tokens.
+    path: context.path?.slice?.(0, 255),
   };
 }
 
@@ -99,7 +102,7 @@ function auditDocument({
     targetId: targetId ? String(targetId) : undefined,
     targetLabel,
     metadata: metadata ? scrubMetadata(metadata) : undefined,
-    ...contextFromRequest(req),
+    ...normalizeContext(req),
   };
 }
 

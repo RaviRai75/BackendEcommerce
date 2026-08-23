@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth.js";
+import { privateNoStore as preventPrivateCaching } from "../../middleware/cachePolicy.js";
 import { validate } from "../../middleware/validate.js";
 import {
   createAddress,
@@ -15,22 +16,22 @@ import {
 
 export const addressRoutes = Router();
 
-addressRoutes.get("/addresses", requireAuth, listAddresses);
+// USER — every address route is owner-bound and carries contact/address PII.
+// The router is mounted at the API root, so middleware must stay path-scoped.
+addressRoutes.use("/addresses", preventPrivateCaching, requireAuth);
+addressRoutes.get("/addresses", listAddresses);
 addressRoutes.post(
   "/addresses",
-  requireAuth,
   validate({ body: createAddressSchema }),
   createAddress,
 );
 addressRoutes.patch(
   "/addresses/:id",
-  requireAuth,
   validate({ params: addressIdParamsSchema, body: updateAddressSchema }),
   updateAddress,
 );
 addressRoutes.delete(
   "/addresses/:id",
-  requireAuth,
   validate({ params: addressIdParamsSchema }),
   deleteAddress,
 );

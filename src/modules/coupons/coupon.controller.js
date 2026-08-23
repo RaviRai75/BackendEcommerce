@@ -31,12 +31,20 @@ export const searchAdminCouponCustomerOptions = asyncHandler(
 );
 
 export const createCoupon = asyncHandler(async (req, res) => {
-  sendCreated(res, await couponService.create(req.body, req.user, req));
+  sendCreated(
+    res,
+    await couponService.create(req.body, req.user, req.serviceContext),
+  );
 });
 
 export const updateCoupon = asyncHandler(async (req, res) => {
   sendSuccess(
     res,
-    await couponService.update(req.params.couponId, req.body, req.user, req),
+    await couponService.update(
+      req.params.couponId,
+      req.body,
+      req.user,
+      req.serviceContext,
+    ),
   );
 });
