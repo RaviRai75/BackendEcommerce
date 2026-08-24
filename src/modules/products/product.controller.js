@@ -8,7 +8,11 @@ import { productInventoryService } from "./productInventory.service.js";
 import { productService } from "./product.service.js";
 import { recommendationService } from "./recommendation.service.js";
 
+const PUBLIC_FACET_CACHE_CONTROL =
+  "public, max-age=30, stale-while-revalidate=60";
+
 export const listProductFacets = asyncHandler(async (_req, res) => {
+  res.set("Cache-Control", PUBLIC_FACET_CACHE_CONTROL);
   sendSuccess(res, await productService.listPublicFacets());
 });
 

@@ -530,6 +530,10 @@ function relationFacet(documents, countRows) {
     }));
 }
 
+export const productPublicationBoundary = Object.freeze({
+  publicRelationConstraint,
+});
+
 export const productRecommendationBoundary = Object.freeze({
   publicRelationConstraint,
   publicSummary,
@@ -869,10 +873,13 @@ export const productService = {
 
     const [products, total] = await Promise.all([
       Product.find(query)
+        .select(
+          "_id slug name shortDescription basePricePaise compareAtPricePaise media variants category isNewArrival isBestseller",
+        )
         .sort(SORTS[effectiveFilters.sort])
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
-        .populate("category", "name slug customization sizeGuide __v")
+        .populate("category", "name slug")
         .lean(),
       Product.countDocuments(query),
     ]);
