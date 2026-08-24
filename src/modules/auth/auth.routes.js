@@ -24,6 +24,7 @@ import {
   refresh,
   register,
   resetPassword,
+  updatePreferences,
 } from "./auth.controller.js";
 import {
   changePasswordSchema,
@@ -31,6 +32,7 @@ import {
   loginSchema,
   registerSchema,
   resetPasswordSchema,
+  updatePreferencesSchema,
 } from "./auth.validator.js";
 
 export const authRoutes = Router();
@@ -76,6 +78,12 @@ authRoutes.post(
 // AUTHENTICATED USER — never accepts a user id from the client.
 
 authRoutes.get("/auth/me", requireAuth, currentUser);
+authRoutes.patch(
+  "/auth/preferences",
+  requireAuth,
+  validate({ body: updatePreferencesSchema }),
+  updatePreferences,
+);
 authRoutes.get("/auth/sessions", requireAuth, listSessions);
 authRoutes.post(
   "/auth/change-password",

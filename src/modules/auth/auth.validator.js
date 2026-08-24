@@ -7,14 +7,14 @@
  * with a validation error rather than quietly ignored, so an attempt is visible
  * in the logs.
  */
-import { z } from 'zod';
+import { z } from "zod";
 import {
   emailSchema,
   passwordSchema,
   personNameSchema,
   phoneSchema,
   strictObject,
-} from '../../validators/common.js';
+} from "../../validators/common.js";
 
 export const registerSchema = strictObject({
   name: personNameSchema,
@@ -35,7 +35,7 @@ export const registerSchema = strictObject({
  */
 export const loginSchema = strictObject({
   email: emailSchema,
-  password: z.string().min(1, 'Please enter your password.').max(128),
+  password: z.string().min(1, "Please enter your password.").max(128),
 });
 
 export const forgotPasswordSchema = strictObject({
@@ -50,12 +50,20 @@ export const resetPasswordSchema = strictObject({
   token: z
     .string()
     .trim()
-    .min(20, 'This reset link is not valid.')
-    .max(200, 'This reset link is not valid.'),
+    .min(20, "This reset link is not valid.")
+    .max(200, "This reset link is not valid."),
   password: passwordSchema,
 });
 
 export const changePasswordSchema = strictObject({
-  currentPassword: z.string().min(1, 'Please enter your current password.').max(128),
+  currentPassword: z
+    .string()
+    .min(1, "Please enter your current password.")
+    .max(128),
   newPassword: passwordSchema,
+});
+
+/** The only customer-editable communication preference. */
+export const updatePreferencesSchema = strictObject({
+  marketingConsent: z.boolean(),
 });

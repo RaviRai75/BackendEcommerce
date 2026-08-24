@@ -831,6 +831,34 @@ export const authService = {
     return { userId: user._id.toString() };
   },
 
+  async updatePreferences({ userId, marketingConsent }) {
+    const update = marketingConsent
+      ? {
+          $set: { marketingConsent: true, marketingConsentAt: new Date() },
+        }
+      : {
+          $set: { marketingConsent: false },
+          $unset: { marketingConsentAt: 1 },
+        };
+
+    // The state predicate preserves the original opt-in timestamp on repeated
+    // saves and makes concurrent identical requests idempotent.
+    const changed = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        isActive: true,
+        marketingConsent: { $ne: marketingConsent },
+      },
+      update,
+      { new: true, runValidators: true },
+    );
+    if (changed) return changed;
+
+    const current = await User.findOne({ _id: userId, isActive: true });
+    if (!current) throw AppError.unauthenticated();
+    return current;
+  },
+
   /**
    * Changes the password of a signed-in customer.
    *

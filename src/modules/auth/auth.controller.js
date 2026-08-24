@@ -132,6 +132,15 @@ export const currentUser = asyncHandler(async (req, res) => {
   sendSuccess(res, { user: req.user.toPublicProfile() });
 });
 
+/** PATCH /auth/preferences — AUTHENTICATED USER */
+export const updatePreferences = asyncHandler(async (req, res) => {
+  const user = await authService.updatePreferences({
+    userId: req.user._id,
+    marketingConsent: req.body.marketingConsent,
+  });
+  sendSuccess(res, { user: user.toPublicProfile() });
+});
+
 /** GET /auth/sessions — AUTHENTICATED USER */
 export const listSessions = asyncHandler(async (req, res) => {
   const sessions = await authService.listActiveSessions(req.user._id);
