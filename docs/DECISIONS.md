@@ -922,3 +922,13 @@ A later connection must remain behind the shipping service/adapter boundary, kee
 **Why.** A provider name is not an integration contract. Guessing authentication, signatures, event schemas, or status mappings could fabricate delivery facts, leak credentials, or repeat fulfillment side effects.
 
 **Cost.** Courier progress is entered manually and may lag Shiprocket until a verified adapter is separately approved and configured.
+
+## D76 — The Style Assistant is stateless, deterministic, and authority-bound
+
+**Decision.** Task 67 adds one public, read-only `POST /chat` Style Assistant endpoint behind the existing chatbot rate limit and private no-store policy. It accepts one bounded message plus optional allow-listed product context and structured discovery slots; it never accepts or returns a raw prior transcript. A local deterministic `aiService` adapter classifies the request, while `chatService` alone orchestrates the existing public product search, catalogue, recommendation, and pincode-serviceability boundaries. Replies use finite plain-text templates, product results use existing public summaries, and navigation uses action enums that the storefront maps to fixed local routes. The browser keeps the visible conversation only in mounted component memory.
+
+Order status and customer support are protected deep links, not public-chat data lookups. Delivery and exchange questions link to the current policy pages instead of copying mutable policy values. Size help reports only offered catalogue sizes and points to an existing size guide; it never infers fit from personal measurements. Sensitive-looking contact, payment, and order references are not echoed, retained in server state, logged by the module, or sent to another provider.
+
+**Why.** This closes the documented product-aware assistant gap with live authoritative data while preserving privacy, owner authorization, stock and publication boundaries, and a replaceable future language-provider seam. No provider key, outbound AI request, conversation collection, browser storage, analytics event, or duplicated commerce rule is required.
+
+**Cost.** Language understanding is intentionally bounded and no conversation survives drawer reset, close, navigation, or reload. A future LLM integration must preserve this request/response boundary, keep credentials and provider calls server-side, define retention and redaction before transmitting free text, and may not replace authoritative service reads with generated commercial facts.

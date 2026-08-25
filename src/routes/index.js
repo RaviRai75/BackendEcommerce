@@ -38,6 +38,7 @@ import { sizeGuideRoutes } from "../modules/sizeGuides/sizeGuide.routes.js";
 import { socialShareRoutes } from "../modules/socialSharing/socialShare.routes.js";
 import { supportRoutes } from "../modules/support/support.routes.js";
 import { seoRoutes } from "../modules/seo/seo.routes.js";
+import { chatRoutes } from "../modules/chat/chat.routes.js";
 import { isProduction } from "../config/env.js";
 import { AppError } from "../utils/AppError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -47,6 +48,7 @@ export const apiRouter = Router();
 // PUBLIC
 apiRouter.use(healthRoutes);
 apiRouter.use(seoRoutes);
+apiRouter.use(chatRoutes);
 
 // PUBLIC + USER — endpoint-specific controls are declared inside the auth router.
 apiRouter.use(authRoutes);
