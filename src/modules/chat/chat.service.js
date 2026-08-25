@@ -244,7 +244,9 @@ export const chatService = Object.freeze({
             ? "Delivery is available for that verified pincode."
             : serviceability.status === "UNSERVICEABLE"
               ? "Delivery is not currently available for that verified pincode."
-              : "I could not verify that pincode. Contact support for delivery assistance.";
+              : serviceability.verified
+                ? serviceability.message
+                : "I could not verify that pincode. Contact support for delivery assistance.";
         return reply(text, {
           serviceability,
           actions: [action(ActionType.DELIVERY_POLICY, "Read delivery policy")],

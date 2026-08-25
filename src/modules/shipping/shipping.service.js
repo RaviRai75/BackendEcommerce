@@ -1,4 +1,4 @@
-import { env } from "../../config/env.js";
+import { operationalPolicyService } from "../content/operationalPolicy.service.js";
 import { pincodeService } from "./pincode.service.js";
 
 export const ServiceabilityStatus = Object.freeze({
@@ -31,14 +31,22 @@ function publicLocation(location) {
   };
 }
 
+function unavailablePolicy(location = null) {
+  return {
+    status: ServiceabilityStatus.UNKNOWN,
+    verified: Boolean(location),
+    serviceable: false,
+    message:
+      "Delivery availability is not configured. Please contact us for assistance.",
+    location: location ? publicLocation(location) : null,
+  };
+}
+
 /**
- * Applies delivery policy to verified geography. Exported for checkout reuse
- * and kept independent from how pincode geography is stored or retrieved.
+ * Applies an explicit enabled delivery policy to verified geography. Exported
+ * for checkout reuse and independent from how pincode geography is retrieved.
  */
-export function evaluateServiceability(
-  location,
-  allowedStates = env.SHIPPING_ALLOWED_STATES,
-) {
+export function evaluateServiceability(location, allowedStates = []) {
   if (!location) {
     return {
       status: ServiceabilityStatus.UNKNOWN,
@@ -49,9 +57,14 @@ export function evaluateServiceability(
       location: null,
     };
   }
+  if (!Array.isArray(allowedStates) || allowedStates.length === 0) {
+    return unavailablePolicy(location);
+  }
 
   const normalizedAllowedStates = new Set(allowedStates.map(normalizeState));
-  const serviceable = normalizedAllowedStates.has(normalizeState(location.state));
+  const serviceable = normalizedAllowedStates.has(
+    normalizeState(location.state),
+  );
 
   return {
     status: serviceable
@@ -68,7 +81,14 @@ export function evaluateServiceability(
 
 export const shippingService = {
   async checkServiceability(pincode) {
-    const location = await pincodeService.findLocation(pincode);
-    return evaluateServiceability(location);
+    const [location, policy] = await Promise.all([
+      pincodeService.findLocation(pincode),
+      operationalPolicyService.getDelivery(),
+    ]);
+    if (!location) return evaluateServiceability(null);
+    if (policy.data.state !== "AVAILABLE_CURRENT_POLICY") {
+      return unavailablePolicy(location);
+    }
+    return evaluateServiceability(location, [policy.data.allowedState]);
   },
 };

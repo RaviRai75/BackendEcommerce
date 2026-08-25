@@ -60,10 +60,14 @@ function loyaltyProgramDto(program) {
 }
 
 function publicSettings(settings) {
+  const announcementWasAuthored = settings?.announcement?.authored === true;
   return {
     announcement: {
-      enabled: settings?.announcement?.enabled ?? DEFAULT_ANNOUNCEMENT.enabled,
-      message: settings?.announcement?.message ?? DEFAULT_ANNOUNCEMENT.message,
+      enabled:
+        announcementWasAuthored && settings?.announcement?.enabled === true,
+      message: announcementWasAuthored
+        ? (settings?.announcement?.message ?? "")
+        : "",
       tone: settings?.announcement?.tone ?? DEFAULT_ANNOUNCEMENT.tone,
     },
     homeHeroMedia: mediaDto(settings?.homeHeroMedia),
@@ -181,19 +185,17 @@ export const settingsService = {
         SiteSettings.findOne({ key: SETTINGS_SINGLETON_KEY }),
         session,
       );
+      const currentAnnouncement =
+        current?.announcement?.authored === true
+          ? current.announcement
+          : DEFAULT_ANNOUNCEMENT;
       const announcement = {
-        enabled:
-          input.announcement?.enabled ??
-          current?.announcement?.enabled ??
-          DEFAULT_ANNOUNCEMENT.enabled,
-        message:
-          input.announcement?.message ??
-          current?.announcement?.message ??
-          DEFAULT_ANNOUNCEMENT.message,
-        tone:
-          input.announcement?.tone ??
-          current?.announcement?.tone ??
-          DEFAULT_ANNOUNCEMENT.tone,
+        authored:
+          input.announcement !== undefined ||
+          current?.announcement?.authored === true,
+        enabled: input.announcement?.enabled ?? currentAnnouncement.enabled,
+        message: input.announcement?.message ?? currentAnnouncement.message,
+        tone: input.announcement?.tone ?? currentAnnouncement.tone,
       };
       if (announcement.enabled && announcement.message.length === 0) {
         throw new AppError(ErrorCode.VALIDATION_ERROR, {

@@ -18,8 +18,8 @@ export const AnnouncementTone = {
 };
 
 export const DEFAULT_ANNOUNCEMENT = Object.freeze({
-  enabled: true,
-  message: "Made in Karnataka • Traditional with a modern touch",
+  enabled: false,
+  message: "",
   tone: AnnouncementTone.WINE,
 });
 
@@ -84,7 +84,8 @@ function announcementValidationError(value) {
 
 const announcementSchema = new mongoose.Schema(
   {
-    enabled: { type: Boolean, required: true, default: true },
+    authored: { type: Boolean, required: true, default: false },
+    enabled: { type: Boolean, required: true, default: false },
     message: shortText({ max: 200 }),
     tone: {
       type: String,

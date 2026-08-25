@@ -932,3 +932,13 @@ Order status and customer support are protected deep links, not public-chat data
 **Why.** This closes the documented product-aware assistant gap with live authoritative data while preserving privacy, owner authorization, stock and publication boundaries, and a replaceable future language-provider seam. No provider key, outbound AI request, conversation collection, browser storage, analytics event, or duplicated commerce rule is required.
 
 **Cost.** Language understanding is intentionally bounded and no conversation survives drawer reset, close, navigation, or reload. A future LLM integration must preserve this request/response boundary, keep credentials and provider calls server-side, define retention and redaction before transmitting free text, and may not replace authoritative service reads with generated commercial facts.
+
+## D77 — Positive storefront claims require an explicit authority
+
+**Decision.** Task 69 removes hard-coded brand-origin, cultural-positioning, and delivery-coverage claims from storefront copy and metadata rather than replacing them with new assertions. Product facts remain sourced from published catalogue fields, review and dashboard metrics remain database-derived, and discounts remain arithmetic over server-authoritative prices. An unconfigured announcement is disabled and empty. Announcements gain an internal `authored` marker that is set only by an explicit administrator settings update; legacy records without that marker are not published until an administrator reviews and saves them.
+
+Public pincode serviceability now requires the same enabled, structurally valid current `OrderPlacementSettings` policy used by checkout and operational delivery policy reads. Pincode geography only verifies location; neither reference data nor an environment default authorizes a positive delivery statement. Without current policy, the endpoint returns `UNKNOWN` and no delivery promise. No product, review, order, rating, testimonial, discount, or customer-count demo data is added.
+
+**Why.** Static positive claims and automatic defaults have no traceable business owner and can remain visible after facts change. Requiring persisted catalogue data, computed records, current operational policy, or an explicit administrator publication step makes provenance reviewable and fails closed when authority is absent.
+
+**Cost.** Existing announcements created before the authorship marker remain hidden until an administrator reviews and republishes them. Public pincode checks report availability as unconfigured until order-placement policy is enabled, and neutral storefront copy carries less brand storytelling until approved content is supplied.
