@@ -13,7 +13,9 @@ import { createHash } from "node:crypto";
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 
-loadDotenv();
+if (process.env.NODE_ENV !== "test") {
+  loadDotenv();
+}
 
 /** Comma-separated list -> trimmed, de-duplicated array. */
 const csvList = z.string().transform((value) =>

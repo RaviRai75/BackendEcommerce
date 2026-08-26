@@ -4,8 +4,12 @@
  * The point of these tests is that a misconfigured deployment must fail
  * immediately and loudly rather than start up in an insecure state.
  */
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseEnv } from "../../src/config/env.js";
+import { env, parseEnv } from "../../src/config/env.js";
 
 /** A minimal environment that should validate cleanly. */
 const validEnv = {
@@ -14,6 +18,56 @@ const validEnv = {
   JWT_ACCESS_SECRET: "a".repeat(32),
   JWT_REFRESH_SECRET: "b".repeat(32),
 };
+
+describe("test environment isolation", () => {
+  it("uses the fixed local MongoDB URI in the singleton configuration", () => {
+    expect(env.MONGODB_URI).toBe("mongodb://127.0.0.1:27017");
+  });
+
+  it("does not load a dotenv file when NODE_ENV is test", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sanchandana-env-test-"));
+
+    try {
+      writeFileSync(
+        join(directory, ".env"),
+        [
+          "MONGODB_URI=mongodb://dotenv-sentinel.invalid:27017/sentinel",
+          `JWT_ACCESS_SECRET=${"c".repeat(32)}`,
+          `JWT_REFRESH_SECRET=${"d".repeat(32)}`,
+        ].join("\n"),
+      );
+
+      const moduleUrl = new URL("../../src/config/env.js", import.meta.url)
+        .href;
+      const script = `
+        try {
+          await import(process.env.ENV_MODULE_URL);
+          process.exitCode = 1;
+        } catch (error) {
+          if (!String(error?.message).includes("MONGODB_URI")) {
+            process.exitCode = 1;
+          }
+        }
+      `;
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "--eval", script],
+        {
+          cwd: directory,
+          env: {
+            NODE_ENV: "test",
+            ENV_MODULE_URL: moduleUrl,
+          },
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("parseEnv", () => {
   it("accepts a minimal valid environment and applies defaults", () => {
@@ -90,9 +144,14 @@ describe("parseEnv", () => {
       ...validEnv,
       NODE_ENV: "production",
       CORS_ALLOWED_ORIGINS: "https://sanchandana.test",
-      // The console email adapter writes message bodies — including a working
-      // password reset link — to the log, so production needs a real provider.
-      EMAIL_PROVIDER: "none",
+      // Production notification delivery requires SMTP and explicit encryption.
+      EMAIL_PROVIDER: "smtp",
+      EMAIL_FROM: "Sanchandana <no-reply@example.test>",
+      SMTP_HOST: "smtp.example.test",
+      SMTP_USER: "test-smtp-user",
+      SMTP_APP_PASSWORD: "test-smtp-app-password",
+      NOTIFICATION_ENCRYPTION_KEY: "e".repeat(64),
+      NOTIFICATION_ENCRYPTION_KEY_ID: "notification-key-v1",
       CLOUDINARY_CLOUD_NAME: "sanchandana",
       CLOUDINARY_API_KEY: "production-cloudinary-key",
       CLOUDINARY_API_SECRET: "production-cloudinary-secret",
@@ -126,7 +185,7 @@ describe("parseEnv", () => {
       // which security §1 and §26 both forbid.
       expect(() =>
         parseEnv({ ...productionEnv, EMAIL_PROVIDER: "console" }),
-      ).toThrow(/console email adapter/i);
+      ).toThrow(/SMTP email provider/i);
     });
 
     it("rejects a wildcard CORS origin in production", () => {

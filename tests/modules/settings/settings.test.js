@@ -159,13 +159,25 @@ describe("site settings administration boundary", () => {
 
   it("rejects empty copy while currently enabled and requires copy when re-enabling", async () => {
     const admin = await adminAccount();
-    const emptyWhileDefaultEnabled = await request(app)
+    const initiallyEnabled = await request(app)
+      .patch("/api/admin/settings")
+      .set(bearer(admin.accessToken))
+      .send({
+        announcement: { enabled: true, message: "Initial announcement" },
+      });
+    expect(initiallyEnabled.status).toBe(200);
+
+    const emptyWhileEnabled = await request(app)
       .patch("/api/admin/settings")
       .set(bearer(admin.accessToken))
       .send({ announcement: { message: "" } });
 
-    expect(emptyWhileDefaultEnabled.status).toBe(422);
-    expect(await SiteSettings.countDocuments()).toBe(0);
+    expect(emptyWhileEnabled.status).toBe(422);
+    expect(await SiteSettings.countDocuments()).toBe(1);
+    expect((await SiteSettings.findOne()).announcement).toMatchObject({
+      enabled: true,
+      message: "Initial announcement",
+    });
 
     const disabled = await request(app)
       .patch("/api/admin/settings")

@@ -188,6 +188,7 @@ describe("coupon administration", () => {
         discountType: CouponDiscountType.PERCENTAGE,
         percentageBasisPoints: 1000,
         flatDiscountPaise: 100,
+        expectedRevision: created.body.data.revision,
       });
     expect(contradictoryPercentage.status).toBe(422);
 
@@ -197,6 +198,7 @@ describe("coupon administration", () => {
       .send({
         discountType: CouponDiscountType.FLAT,
         flatDiscountPaise: 2500,
+        expectedRevision: created.body.data.revision,
       });
     expect(updated.status, JSON.stringify(updated.body)).toBe(200);
     expect(updated.body.data).toMatchObject({
@@ -211,20 +213,27 @@ describe("coupon administration", () => {
         discountType: CouponDiscountType.FLAT,
         flatDiscountPaise: 2500,
         percentageBasisPoints: 1000,
+        expectedRevision: updated.body.data.revision,
       });
     expect(contradictoryFlat.status).toBe(422);
 
     const archived = await request(app)
       .patch(`/api/admin/coupons/${created.body.data.id}`)
       .set(bearer(admin.accessToken))
-      .send({ status: CouponStatus.ARCHIVED });
+      .send({
+        status: CouponStatus.ARCHIVED,
+        expectedRevision: updated.body.data.revision,
+      });
     expect(archived.status).toBe(200);
     expect(
       (
         await request(app)
           .patch(`/api/admin/coupons/${created.body.data.id}`)
           .set(bearer(admin.accessToken))
-          .send({ minimumOrderPaise: 1 })
+          .send({
+            minimumOrderPaise: 1,
+            expectedRevision: archived.body.data.revision,
+          })
       ).status,
     ).toBe(422);
     expect(
@@ -252,6 +261,7 @@ describe("coupon administration", () => {
     });
     expect(audits[1].metadata.changedFields).toEqual([
       "discountType",
+      "percentageBasisPoints",
       "flatDiscountPaise",
     ]);
   });

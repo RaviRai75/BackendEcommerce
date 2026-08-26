@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import request from "supertest";
 import { app } from "../../../src/app.js";
 import { resetAllRateLimits } from "../../../src/middleware/rateLimiters.js";
+import {
+  ORDER_PLACEMENT_SETTINGS_KEY,
+  OrderPlacementSettings,
+} from "../../../src/modules/orders/orderPlacementSettings.model.js";
 import { Pincode } from "../../../src/modules/shipping/pincode.model.js";
 import { evaluateServiceability } from "../../../src/modules/shipping/shipping.service.js";
 import { useTestDatabase } from "../../helpers/database.js";
@@ -28,6 +32,21 @@ async function seedLocations() {
   ]);
 }
 
+async function seedDeliveryPolicy(overrides = {}) {
+  return OrderPlacementSettings.create({
+    key: ORDER_PLACEMENT_SETTINGS_KEY,
+    enabled: true,
+    version: 1,
+    allowedState: "Karnataka",
+    flatDeliveryPaise: 5_000,
+    freeDeliveryThresholdPaise: 100_000,
+    pincodeChargeOverrides: [],
+    cod: { enabled: true, surchargePaise: 0 },
+    prepaid: { enabled: true, surchargePaise: 0 },
+    ...overrides,
+  });
+}
+
 describe("GET /api/shipping/serviceability", () => {
   it("strictly validates an Indian six-digit pincode and rejects unknown query fields", async () => {
     for (const query of [
@@ -49,6 +68,7 @@ describe("GET /api/shipping/serviceability", () => {
 
   it("returns SERVICEABLE with verified public geography for an allowed state", async () => {
     await seedLocations();
+    await seedDeliveryPolicy();
 
     const response = await request(app)
       .get("/api/shipping/serviceability")
@@ -71,8 +91,9 @@ describe("GET /api/shipping/serviceability", () => {
     });
   });
 
-  it("returns UNSERVICEABLE for verified geography outside the configured default", async () => {
+  it("returns UNSERVICEABLE for verified geography outside the current policy", async () => {
     await seedLocations();
+    await seedDeliveryPolicy();
 
     const response = await request(app)
       .get("/api/shipping/serviceability")
@@ -94,6 +115,7 @@ describe("GET /api/shipping/serviceability", () => {
 
   it("returns UNKNOWN without guessing from a pincode prefix", async () => {
     await seedLocations();
+    await seedDeliveryPolicy();
 
     const response = await request(app)
       .get("/api/shipping/serviceability")
@@ -109,6 +131,28 @@ describe("GET /api/shipping/serviceability", () => {
       location: null,
     });
     expect(response.body.data.message).not.toMatch(/outside Karnataka/i);
+  });
+
+  it("returns neutral UNKNOWN for verified geography without a current policy", async () => {
+    await seedLocations();
+
+    const response = await request(app)
+      .get("/api/shipping/serviceability")
+      .query({ pincode: "560001" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({
+      status: "UNKNOWN",
+      verified: true,
+      serviceable: false,
+      message:
+        "Delivery availability is not configured. Please contact us for assistance.",
+      location: {
+        city: "Bengaluru",
+        district: "Bengaluru Urban",
+        state: "Karnataka",
+      },
+    });
   });
 
   it("applies injected allowed states case-insensitively for checkout reuse", () => {
@@ -130,10 +174,11 @@ describe("GET /api/shipping/serviceability", () => {
         state: "Maharashtra",
       },
     });
-    expect(evaluateServiceability(location, ["Karnataka", "Tamil Nadu"]))
-      .toMatchObject({
-        status: "UNSERVICEABLE",
-        message: "Currently we deliver only within Karnataka and Tamil Nadu.",
-      });
+    expect(
+      evaluateServiceability(location, ["Karnataka", "Tamil Nadu"]),
+    ).toMatchObject({
+      status: "UNSERVICEABLE",
+      message: "Currently we deliver only within Karnataka and Tamil Nadu.",
+    });
   });
 });

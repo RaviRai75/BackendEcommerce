@@ -22,11 +22,17 @@ import {
 import {
   Payment,
   PaymentAttemptStatus,
+  PaymentPayableType,
 } from "../../../src/modules/payments/payment.model.js";
-import { PaymentEvent } from "../../../src/modules/payments/paymentEvent.model.js";
+import {
+  PaymentEvent,
+  PaymentEventStatus,
+  PaymentEventType,
+} from "../../../src/modules/payments/paymentEvent.model.js";
 import {
   AuditAction,
   AuditLog,
+  AuditTargetType,
 } from "../../../src/modules/system/auditLog.model.js";
 import { paymentService } from "../../../src/services/payment/index.js";
 import { signMockWebhook } from "../../../src/services/payment/adapters/mockPrepaid.adapter.js";
@@ -41,7 +47,9 @@ afterEach(() => {
 });
 
 let sequence = 0;
-const bearer = (account) => ({ Authorization: `Bearer ${account.accessToken}` });
+const bearer = (account) => ({
+  Authorization: `Bearer ${account.accessToken}`,
+});
 const key = (suffix = "a") => `task18-idempotency-${suffix}-${"x".repeat(40)}`;
 
 async function seedOrder(account, overrides = {}) {
@@ -97,7 +105,11 @@ async function seedOrder(account, overrides = {}) {
     fulfillmentStatus: OrderFulfillmentStatus.UNFULFILLED,
     statusHistory: [
       { domain: "PLACEMENT", status: OrderPlacementStatus.PLACED, at: now },
-      { domain: "PAYMENT", status: OrderPaymentStatus.PREPAID_PENDING, at: now },
+      {
+        domain: "PAYMENT",
+        status: OrderPaymentStatus.PREPAID_PENDING,
+        at: now,
+      },
       {
         domain: "FULFILLMENT",
         status: OrderFulfillmentStatus.UNFULFILLED,
@@ -142,8 +154,7 @@ function webhookPayload(payment, overrides = {}) {
 
 function postSignedWebhook(payload, options = {}) {
   const raw = JSON.stringify(payload);
-  const timestamp =
-    options.timestamp ?? String(Math.floor(Date.now() / 1000));
+  const timestamp = options.timestamp ?? String(Math.floor(Date.now() / 1000));
   const signature = options.signature ?? signMockWebhook(raw, timestamp);
   return request(app)
     .post("/api/webhooks/payments/mock-prepaid")
@@ -192,9 +203,9 @@ describe("Task 18 payment boundary", () => {
       initiate(account, order, idempotencyKey),
     ]);
     expect(responses.map((entry) => entry.status).sort()).toEqual([200, 201]);
-    expect(new Set(responses.map((entry) => entry.body.data.attemptId)).size).toBe(
-      1,
-    );
+    expect(
+      new Set(responses.map((entry) => entry.body.data.attemptId)).size,
+    ).toBe(1);
     const resumed = await initiate(account, order, key("resume"));
     expect(resumed.status).toBe(200);
     expect(resumed.body.data.attemptId).toBe(responses[0].body.data.attemptId);
@@ -218,9 +229,9 @@ describe("Task 18 payment boundary", () => {
       (await verify(account, order, attemptId, "0".repeat(64))).status,
     ).toBe(400);
     transactionMode.supported = false;
-    expect((await verify(account, order, attemptId, action.checkoutToken)).status).toBe(
-      503,
-    );
+    expect(
+      (await verify(account, order, attemptId, action.checkoutToken)).status,
+    ).toBe(503);
     transactionMode.supported = true;
     const confirmed = await verify(
       account,
@@ -253,9 +264,9 @@ describe("Task 18 payment boundary", () => {
       (await postSignedWebhook(payload, { signature: "0".repeat(64) })).status,
     ).toBe(400);
     const stale = String(Math.floor(Date.now() / 1000) - 1_000);
-    expect((await postSignedWebhook(payload, { timestamp: stale })).status).toBe(
-      400,
-    );
+    expect(
+      (await postSignedWebhook(payload, { timestamp: stale })).status,
+    ).toBe(400);
     expect((await postSignedWebhook(payload)).status).toBe(200);
     expect((await postSignedWebhook(payload)).status).toBe(200);
     expect(await PaymentEvent.countDocuments()).toBe(1);
@@ -267,6 +278,120 @@ describe("Task 18 payment boundary", () => {
     expect((await Order.findById(order._id)).paymentStatus).toBe(
       OrderPaymentStatus.PREPAID_PENDING,
     );
+  });
+
+  it("confirms an authentic success webhook exactly once across exact replay", async () => {
+    const account = await registerUser(app);
+    const order = await seedOrder(account);
+    const initiated = await initiate(account, order, key("webhook-success"));
+    const payment = await Payment.findById(initiated.body.data.attemptId);
+    const payload = webhookPayload(payment);
+
+    const confirmed = await postSignedWebhook(payload);
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.body).toEqual({
+      success: true,
+      data: { received: true },
+    });
+
+    const [confirmedPayment, confirmedOrder, event, audit] = await Promise.all([
+      Payment.findById(payment._id).lean(),
+      Order.findById(order._id).lean(),
+      PaymentEvent.findOne({ eventId: payload.eventId }).lean(),
+      AuditLog.findOne({
+        action: AuditAction.PAYMENT_VERIFIED,
+        targetId: order._id.toString(),
+      }).lean(),
+    ]);
+    expect(confirmedPayment).toMatchObject({
+      status: PaymentAttemptStatus.CONFIRMED,
+      providerPaymentId: payload.providerPaymentId,
+      amountPaise: payload.amountPaise,
+      currency: payload.currency,
+    });
+    expect(
+      confirmedPayment.history.filter(
+        (entry) => entry.status === PaymentAttemptStatus.CONFIRMED,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        reason: "Provider payment verified",
+        at: confirmedPayment.confirmedAt,
+      }),
+    ]);
+    expect(confirmedOrder).toMatchObject({
+      placementStatus: OrderPlacementStatus.PLACED,
+      paymentStatus: OrderPaymentStatus.PREPAID_CONFIRMED,
+      fulfillmentStatus: OrderFulfillmentStatus.UNFULFILLED,
+      paidAt: confirmedPayment.confirmedAt,
+    });
+    expect(
+      confirmedOrder.statusHistory.filter(
+        (entry) =>
+          entry.domain === "PAYMENT" &&
+          entry.status === OrderPaymentStatus.PREPAID_CONFIRMED,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        reason: "Provider payment verified",
+        at: confirmedOrder.paidAt,
+      }),
+    ]);
+    expect(event).toMatchObject({
+      eventId: payload.eventId,
+      eventType: PaymentEventType.PAYMENT_SUCCEEDED,
+      payment: payment._id,
+      payableType: PaymentPayableType.ORDER,
+      order: order._id,
+      providerReference: payment.merchantReference,
+      providerPaymentId: payload.providerPaymentId,
+      status: PaymentEventStatus.PROCESSED,
+      occurredAt: new Date(payload.occurredAt),
+    });
+    expect(audit).toMatchObject({
+      action: AuditAction.PAYMENT_VERIFIED,
+      targetType: AuditTargetType.ORDER,
+      targetId: order._id.toString(),
+      targetLabel: order.orderNumber,
+      metadata: {
+        provider: payment.provider,
+        attemptId: payment._id.toString(),
+        paymentStatus: PaymentAttemptStatus.CONFIRMED,
+        amountPaise: payment.amountPaise,
+        currency: payment.currency,
+      },
+    });
+    expect(audit.actor).toBeUndefined();
+
+    const replay = await postSignedWebhook(payload);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(confirmed.body);
+
+    const [replayedPayment, replayedOrder] = await Promise.all([
+      Payment.findById(payment._id).lean(),
+      Order.findById(order._id).lean(),
+    ]);
+    expect(
+      await PaymentEvent.countDocuments({ eventId: payload.eventId }),
+    ).toBe(1);
+    expect(
+      await AuditLog.countDocuments({
+        action: AuditAction.PAYMENT_VERIFIED,
+        targetId: order._id.toString(),
+      }),
+    ).toBe(1);
+    expect(
+      replayedPayment.history.filter(
+        (entry) => entry.status === PaymentAttemptStatus.CONFIRMED,
+      ),
+    ).toHaveLength(1);
+    expect(
+      replayedOrder.statusHistory.filter(
+        (entry) =>
+          entry.domain === "PAYMENT" &&
+          entry.status === OrderPaymentStatus.PREPAID_CONFIRMED,
+      ),
+    ).toHaveLength(1);
   });
 
   it("keeps REFUNDED absorbing across distinct success events and hides terminal actions", async () => {
@@ -362,7 +487,9 @@ describe("Task 18 payment boundary", () => {
       CLOUDINARY_VIDEO_UPLOAD_PRESET: "production-product-videos",
       PREPAID_PROVIDER: "MOCK_PREPAID",
     };
-    expect(() => parseEnv(production)).toThrow(/must not be used in production/i);
+    expect(() => parseEnv(production)).toThrow(
+      /must not be used in production/i,
+    );
     expect(Payment.schema.indexes()).toEqual(
       expect.arrayContaining([
         [{ order: 1 }, expect.objectContaining({ unique: true })],

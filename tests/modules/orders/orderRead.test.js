@@ -338,8 +338,15 @@ describe("customer order reads", () => {
       "shippingAddress",
       "pricing",
       "coupon",
+      "tracking",
       "history",
     ]);
+    expect(response.body.data.tracking).toMatchObject({
+      status: "UNFULFILLED",
+      deliveredAt: null,
+      milestones: [{ status: "ORDER_CONFIRMED", at: expect.any(String) }],
+      shipment: null,
+    });
     expect(
       response.body.data.history.map((entry) => Object.keys(entry)),
     ).toEqual([

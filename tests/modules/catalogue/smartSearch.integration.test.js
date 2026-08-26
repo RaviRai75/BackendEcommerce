@@ -19,10 +19,18 @@ async function adminAccount() {
 }
 
 async function setStatus(admin, resource, id, status = "PUBLISHED") {
+  const payload = { status };
+  if (resource !== "collections") {
+    const current = await request(app)
+      .get(`/api/admin/${resource}/${id}`)
+      .set(bearer(admin.accessToken));
+    expect(current.status, JSON.stringify(current.body)).toBe(200);
+    payload.expectedRevision = current.body.data.revision;
+  }
   const response = await request(app)
     .patch(`/api/admin/${resource}/${id}/status`)
     .set(bearer(admin.accessToken))
-    .send({ status });
+    .send(payload);
   expect(response.status, JSON.stringify(response.body)).toBe(200);
 }
 

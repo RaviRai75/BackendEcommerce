@@ -20,6 +20,10 @@ import {
   MediaPurposePrefix,
 } from "../../../src/modules/media/mediaAsset.model.js";
 import {
+  AdminInventoryReason,
+  AdminInventoryTransaction,
+} from "../../../src/modules/products/adminInventoryTransaction.model.js";
+import {
   Product,
   ProductStatus,
 } from "../../../src/modules/products/product.model.js";
@@ -27,6 +31,8 @@ import { cloudinaryMediaError } from "../../../src/modules/products/cloudinaryMe
 import {
   AuditAction,
   AuditLog,
+  AuditOutcome,
+  AuditTargetType,
 } from "../../../src/modules/system/auditLog.model.js";
 import { useTestDatabase } from "../../helpers/database.js";
 import { promoteToAdmin, registerUser } from "../../helpers/auth.js";
@@ -76,10 +82,11 @@ async function createCollection(admin, options = {}) {
 }
 
 async function setStatus(admin, resource, id, status) {
+  const requiresRevision = ["categories", "products"].includes(resource);
   let expectedRevision;
-  if (resource === "products") {
+  if (requiresRevision) {
     const current = await request(app)
-      .get(`/api/admin/products/${id}`)
+      .get(`/api/admin/${resource}/${id}`)
       .set(bearer(admin.accessToken));
     expect(current.status).toBe(200);
     expectedRevision = current.body.data.revision;
@@ -89,7 +96,7 @@ async function setStatus(admin, resource, id, status) {
     .set(bearer(admin.accessToken))
     .send({
       status,
-      ...(resource === "products" ? { expectedRevision } : {}),
+      ...(requiresRevision ? { expectedRevision } : {}),
     });
 }
 
@@ -993,6 +1000,211 @@ describe("catalogue administration boundary", () => {
     await expect(stored.validate()).rejects.toThrow(/size\/colour/i);
   });
 
+  it("rejects unauthorized and malformed stock adjustments without mutation", async () => {
+    const customer = await registerUser(app);
+    const admin = await adminAccount();
+    const category = await createCategory(admin);
+    const collection = await createCollection(admin);
+    const created = await createProduct(
+      admin,
+      productInput(category, collection),
+    );
+    expect(created.status).toBe(201);
+    const productId = created.body.data.id;
+    const variantId = created.body.data.variants[0].id;
+    const detail = await request(app)
+      .get(`/api/admin/products/${productId}`)
+      .set(bearer(admin.accessToken));
+    const adjustment = {
+      delta: 2,
+      expectedProductRevision: detail.body.data.revision,
+      expectedStock: detail.body.data.variants[0].stock,
+      reason: AdminInventoryReason.RECOUNT,
+      note: "Task 73 authorization boundary",
+    };
+    const path = `/api/admin/products/${productId}/variants/${variantId}/stock-adjustments`;
+
+    const anonymous = await request(app)
+      .post(path)
+      .set("Idempotency-Key", `stock-anonymous-${randomUUID()}`)
+      .send(adjustment);
+    const forbidden = await request(app)
+      .post(path)
+      .set(bearer(customer.accessToken))
+      .set("Idempotency-Key", `stock-customer-${randomUUID()}`)
+      .send(adjustment);
+    const missingKey = await request(app)
+      .post(path)
+      .set(bearer(admin.accessToken))
+      .send(adjustment);
+    const strictBody = await request(app)
+      .post(path)
+      .set(bearer(admin.accessToken))
+      .set("Idempotency-Key", `stock-invalid-${randomUUID()}`)
+      .send({ ...adjustment, afterStock: 999 });
+
+    expect(anonymous.status).toBe(401);
+    expect(forbidden.status).toBe(403);
+    for (const response of [missingKey, strictBody]) {
+      expect(response.status).toBe(422);
+      expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    }
+
+    const unchanged = await Product.findById(productId);
+    expect(unchanged.__v).toBe(adjustment.expectedProductRevision);
+    expect(unchanged.variants.id(variantId).stock).toBe(
+      adjustment.expectedStock,
+    );
+    expect(await AdminInventoryTransaction.countDocuments()).toBe(0);
+    expect(
+      await AuditLog.countDocuments({ action: AuditAction.STOCK_ADJUSTED }),
+    ).toBe(0);
+  });
+
+  it("commits one immutable stock ledger and audit across replay and conflicts", async () => {
+    const admin = await adminAccount();
+    const category = await createCategory(admin);
+    const collection = await createCollection(admin);
+    const input = productInput(category, collection);
+    const created = await createProduct(admin, input);
+    expect(created.status).toBe(201);
+    const productId = created.body.data.id;
+    const variantId = created.body.data.variants[0].id;
+    const detail = await request(app)
+      .get(`/api/admin/products/${productId}`)
+      .set(bearer(admin.accessToken));
+    const beforeRevision = detail.body.data.revision;
+    const beforeStock = detail.body.data.variants[0].stock;
+    const adjustment = {
+      delta: -1,
+      expectedProductRevision: beforeRevision,
+      expectedStock: beforeStock,
+      reason: AdminInventoryReason.DAMAGE,
+      note: "One damaged unit",
+    };
+    const path = `/api/admin/products/${productId}/variants/${variantId}/stock-adjustments`;
+    const idempotencyKey = `stock-adjustment-${randomUUID()}`;
+
+    const committed = await request(app)
+      .post(path)
+      .set(bearer(admin.accessToken))
+      .set("Idempotency-Key", idempotencyKey)
+      .send(adjustment);
+    expect(committed.status, JSON.stringify(committed.body)).toBe(201);
+    expect(committed.body).toEqual({
+      success: true,
+      data: {
+        id: expect.any(String),
+        productId,
+        variantId,
+        reason: AdminInventoryReason.DAMAGE,
+        note: adjustment.note,
+        delta: -1,
+        beforeStock,
+        afterStock: beforeStock - 1,
+        beforeRevision,
+        afterRevision: beforeRevision + 1,
+        createdAt: expect.any(String),
+      },
+    });
+
+    const [adjusted, ledger, audit] = await Promise.all([
+      Product.findById(productId),
+      AdminInventoryTransaction.findOne({ product: productId }).lean(),
+      AuditLog.findOne({
+        action: AuditAction.STOCK_ADJUSTED,
+        targetId: productId,
+      }).lean(),
+    ]);
+    expect(adjusted.__v).toBe(beforeRevision + 1);
+    expect(adjusted.variants.id(variantId).stock).toBe(beforeStock - 1);
+    expect({
+      actor: ledger.actor.toString(),
+      product: ledger.product.toString(),
+      variant: ledger.variant.toString(),
+      reason: ledger.reason,
+      note: ledger.note,
+      quantityDelta: ledger.quantityDelta,
+      beforeStock: ledger.beforeStock,
+      afterStock: ledger.afterStock,
+      beforeRevision: ledger.beforeRevision,
+      afterRevision: ledger.afterRevision,
+    }).toEqual({
+      actor: admin.user.id,
+      product: productId,
+      variant: variantId,
+      reason: AdminInventoryReason.DAMAGE,
+      note: adjustment.note,
+      quantityDelta: -1,
+      beforeStock,
+      afterStock: beforeStock - 1,
+      beforeRevision,
+      afterRevision: beforeRevision + 1,
+    });
+    expect(ledger.idempotencyKeyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(ledger.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(audit).toMatchObject({
+      targetType: AuditTargetType.PRODUCT,
+      targetId: productId,
+      targetLabel: input.name,
+      outcome: AuditOutcome.SUCCESS,
+      method: "POST",
+      path: `/admin/products/${productId}/variants/${variantId}/stock-adjustments`,
+    });
+    expect(audit.actor.toString()).toBe(admin.user.id);
+    expect(audit.metadata).toEqual({
+      variantId,
+      sku: input.variants[0].sku,
+      reason: AdminInventoryReason.DAMAGE,
+      delta: -1,
+      beforeStock,
+      afterStock: beforeStock - 1,
+      beforeRevision,
+      afterRevision: beforeRevision + 1,
+    });
+    await expect(
+      AdminInventoryTransaction.updateOne(
+        { _id: ledger._id },
+        { $set: { note: "rewritten" } },
+      ),
+    ).rejects.toThrow(/append-only/i);
+
+    const replay = await request(app)
+      .post(path)
+      .set(bearer(admin.accessToken))
+      .set("Idempotency-Key", idempotencyKey)
+      .send(adjustment);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(committed.body);
+
+    const changedSameKey = await request(app)
+      .post(path)
+      .set(bearer(admin.accessToken))
+      .set("Idempotency-Key", idempotencyKey)
+      .send({ ...adjustment, delta: -2 });
+    expect(changedSameKey.status).toBe(409);
+    expect(changedSameKey.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+
+    const staleNewKey = await request(app)
+      .post(path)
+      .set(bearer(admin.accessToken))
+      .set("Idempotency-Key", `stock-stale-${randomUUID()}`)
+      .send(adjustment);
+    expect(staleNewKey.status).toBe(409);
+    expect(staleNewKey.body.error.code).toBe("STOCK_CHANGED");
+
+    const finalProduct = await Product.findById(productId);
+    expect(finalProduct.__v).toBe(beforeRevision + 1);
+    expect(finalProduct.variants.id(variantId).stock).toBe(beforeStock - 1);
+    expect(await AdminInventoryTransaction.countDocuments()).toBe(1);
+    expect(
+      await AuditLog.countDocuments({
+        action: AuditAction.STOCK_ADJUSTED,
+        targetId: productId,
+      }),
+    ).toBe(1);
+  });
+
   it("updates/clears money, preserves variant IDs and stock, and audits price changes", async () => {
     const admin = await adminAccount();
     const { category, collection } = await publishedTaxonomy(admin);
@@ -1059,6 +1271,25 @@ describe("catalogue administration boundary", () => {
       compareAtPriceRupees: 1000,
     });
     expect(invalidPartialPrice.status).toBe(422);
+    expect(invalidPartialPrice.body).toMatchObject({
+      success: false,
+      error: {
+        code: "VALIDATION_ERROR",
+        details: {
+          compareAtPriceRupees:
+            "Compare-at price must be greater than the selling price.",
+        },
+      },
+    });
+    const afterRejectedPrice = await Product.findById(productId).lean();
+    expect(afterRejectedPrice.basePricePaise).toBe(129975);
+    expect(afterRejectedPrice.compareAtPricePaise ?? null).toBeNull();
+    expect(
+      await AuditLog.countDocuments({
+        action: AuditAction.PRODUCT_PRICE_CHANGED,
+        targetId: productId,
+      }),
+    ).toBe(1);
   });
 
   it("rejects incoherent Cloudinary metadata and accepts coherent video posters", async () => {

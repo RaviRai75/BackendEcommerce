@@ -11,8 +11,7 @@ process.env.NODE_ENV = "test";
 process.env.PORT = "5001";
 process.env.API_PREFIX = "/api";
 
-process.env.MONGODB_URI =
-  process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017";
+process.env.MONGODB_URI = "mongodb://127.0.0.1:27017";
 process.env.MONGODB_DB_NAME = "sanchandana_test";
 
 process.env.JWT_ACCESS_SECRET = "test-access-secret-that-is-long-enough-000000";

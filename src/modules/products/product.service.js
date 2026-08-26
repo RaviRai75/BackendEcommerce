@@ -1013,6 +1013,25 @@ export const productService = {
         await mediaService.assertProductMedia(input.media, { session });
       }
       const fields = persistenceFields(input);
+      const nextBasePricePaise = Object.hasOwn(fields, "basePricePaise")
+        ? fields.basePricePaise
+        : product.basePricePaise;
+      const nextCompareAtPricePaise = Object.hasOwn(
+        fields,
+        "compareAtPricePaise",
+      )
+        ? fields.compareAtPricePaise
+        : product.compareAtPricePaise;
+      if (
+        nextCompareAtPricePaise !== null &&
+        nextCompareAtPricePaise !== undefined &&
+        nextCompareAtPricePaise <= nextBasePricePaise
+      ) {
+        throw AppError.validation({
+          compareAtPriceRupees:
+            "Compare-at price must be greater than the selling price.",
+        });
+      }
       if (fields.variants) {
         fields.variants = preserveVariantIds(product, fields.variants);
       }
