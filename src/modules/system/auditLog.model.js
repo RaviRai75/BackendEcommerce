@@ -76,6 +76,7 @@ export const AuditAction = {
   PAYMENT_VERIFIED: "PAYMENT_VERIFIED",
   PAYMENT_REFUNDED: "PAYMENT_REFUNDED",
   SHIPMENT_RECORDED: "SHIPMENT_RECORDED",
+  INVOICE_ISSUED: "INVOICE_ISSUED",
 
   // --- Exchanges (Tasks 21, 22) -----------------------------------------
   EXCHANGE_REQUESTED: "EXCHANGE_REQUESTED",
@@ -145,6 +146,7 @@ export const AuditTargetType = {
   COLLECTION: "Collection",
   PRODUCT: "Product",
   ORDER: "Order",
+  INVOICE: "OrderInvoice",
   EXCHANGE: "Exchange",
   COUPON: "Coupon",
   REVIEW: "Review",

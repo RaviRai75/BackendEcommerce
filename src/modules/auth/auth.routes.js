@@ -7,6 +7,7 @@
  */
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth.js";
+import { privateNoStore as preventPrivateCaching } from "../../middleware/cachePolicy.js";
 import { requireCsrfToken } from "../../middleware/csrf.js";
 import {
   authLimiter,
@@ -77,14 +78,19 @@ authRoutes.post(
 
 // AUTHENTICATED USER — never accepts a user id from the client.
 
-authRoutes.get("/auth/me", requireAuth, currentUser);
+authRoutes.get("/auth/me", preventPrivateCaching, requireAuth, currentUser);
 authRoutes.patch(
   "/auth/preferences",
   requireAuth,
   validate({ body: updatePreferencesSchema }),
   updatePreferences,
 );
-authRoutes.get("/auth/sessions", requireAuth, listSessions);
+authRoutes.get(
+  "/auth/sessions",
+  preventPrivateCaching,
+  requireAuth,
+  listSessions,
+);
 authRoutes.post(
   "/auth/change-password",
   authLimiter,

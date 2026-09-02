@@ -5,6 +5,8 @@ import { requireIdempotencyKey as createIdempotencyKeyMiddleware } from "../../m
 import { orderLimiter, quoteLimiter } from "../../middleware/rateLimiters.js";
 import { validate } from "../../middleware/validate.js";
 import {
+  downloadAdminOrderInvoice,
+  downloadOrderInvoice,
   getAdminOrder,
   getOrder,
   listAdminOrders,
@@ -41,6 +43,13 @@ orderRoutes.get(
   validate({ params: orderNumberParamSchema }),
   getOrder,
 );
+orderRoutes.get(
+  "/orders/:orderNumber/invoice.pdf",
+  preventPrivateCaching,
+  requireAuth,
+  validate({ params: orderNumberParamSchema }),
+  downloadOrderInvoice,
+);
 orderRoutes.post(
   "/orders/quote",
   requireAuth,
@@ -72,6 +81,14 @@ orderRoutes.get(
   requireAdmin,
   validate({ params: orderNumberParamSchema }),
   getAdminOrder,
+);
+orderRoutes.get(
+  "/admin/orders/:orderNumber/invoice.pdf",
+  preventPrivateCaching,
+  requireAuth,
+  requireAdmin,
+  validate({ params: orderNumberParamSchema }),
+  downloadAdminOrderInvoice,
 );
 orderRoutes.post(
   "/admin/orders/:orderNumber/actions",

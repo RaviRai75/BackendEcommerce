@@ -12,6 +12,7 @@
 import { app } from "./app.js";
 import { env, isProduction } from "./config/env.js";
 import { connectDatabase, disconnectDatabase } from "./config/database.js";
+import { configureHttpServer } from "./config/httpServer.js";
 import { logger } from "./utils/logger.js";
 
 /** @type {import('node:http').Server | undefined} */
@@ -21,12 +22,14 @@ let shuttingDown = false;
 async function start() {
   await connectDatabase();
 
-  server = app.listen(env.PORT, () => {
-    logger.info(
-      { port: env.PORT, prefix: env.API_PREFIX, autoIndex: !isProduction },
-      `Sanchandana API listening on port ${env.PORT}`,
-    );
-  });
+  server = configureHttpServer(
+    app.listen(env.PORT, () => {
+      logger.info(
+        { port: env.PORT, prefix: env.API_PREFIX, autoIndex: !isProduction },
+        `Sanchandana API listening on port ${env.PORT}`,
+      );
+    }),
+  );
 }
 
 /** Stop accepting connections, finish in-flight requests, close the database, exit. */

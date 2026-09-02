@@ -52,6 +52,7 @@ export const ErrorCode = {
 
   // --- Orders / payments --------------------------------------------------
   ORDER_NOT_FOUND: "ORDER_NOT_FOUND",
+  INVOICE_SEQUENCE_EXHAUSTED: "INVOICE_SEQUENCE_EXHAUSTED",
   IDEMPOTENCY_CONFLICT: "IDEMPOTENCY_CONFLICT",
   INVALID_STATUS_TRANSITION: "INVALID_STATUS_TRANSITION",
   PAYMENT_FAILED: "PAYMENT_FAILED",
@@ -166,6 +167,8 @@ export const ErrorMessage = {
     "This coupon changed after it was loaded. Reload and review it.",
 
   [ErrorCode.ORDER_NOT_FOUND]: "We could not find that order.",
+  [ErrorCode.INVOICE_SEQUENCE_EXHAUSTED]:
+    "Invoice numbering is temporarily unavailable. Please try again later.",
   [ErrorCode.IDEMPOTENCY_CONFLICT]:
     "That Idempotency-Key was already used for a different order request.",
   [ErrorCode.INVALID_STATUS_TRANSITION]: "That status change is not allowed.",
@@ -284,6 +287,7 @@ export const ErrorStatus = {
   [ErrorCode.COUPON_CHANGED]: 409,
 
   [ErrorCode.ORDER_NOT_FOUND]: 404,
+  [ErrorCode.INVOICE_SEQUENCE_EXHAUSTED]: 503,
   [ErrorCode.IDEMPOTENCY_CONFLICT]: 409,
   [ErrorCode.INVALID_STATUS_TRANSITION]: 409,
   [ErrorCode.PAYMENT_FAILED]: 402,

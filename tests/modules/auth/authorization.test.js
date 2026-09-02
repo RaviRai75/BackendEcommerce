@@ -89,12 +89,14 @@ describe("authenticated account boundary", () => {
       .set(bearer(first.accessToken));
 
     expect(profile.status).toBe(200);
+    expect(profile.headers["cache-control"]).toBe("private, no-store");
     expect(profile.body.data.user).toMatchObject({
       id: first.user.id,
       name: "First Customer",
       role: UserRole.USER,
     });
     expect(sessions.status).toBe(200);
+    expect(sessions.headers["cache-control"]).toBe("private, no-store");
     expect(sessions.body.data.sessions).toHaveLength(1);
     expect(sessions.body.data.sessions[0]).not.toHaveProperty("ipAddress");
     expect(sessions.body.data.sessions[0]).toHaveProperty("ipPrefix");
@@ -271,6 +273,7 @@ describe("server-authoritative role checks", () => {
       .set(bearer(account.accessToken));
 
     expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
     expect(response.body).toMatchObject({
       success: true,
       meta: { page: 1, limit: 25 },

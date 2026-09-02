@@ -47,6 +47,7 @@ import {
   OrderPlacementStatus,
 } from "./order.model.js";
 import { assertPlacementReleasable } from "./order.stateMachine.js";
+import { orderInvoiceService } from "./orderInvoice.service.js";
 import { releaseOrderResources } from "./orderRelease.service.js";
 import { Shipment, ShipmentDirection } from "../shipping/shipment.model.js";
 import {
@@ -507,21 +508,24 @@ export const orderService = {
         .lean();
       if (!order) throw new AppError(ErrorCode.ORDER_NOT_FOUND);
 
-      const shipment = await Shipment.findOne({
-        order: order._id,
-        direction: ShipmentDirection.FORWARD,
-      })
-        .select(
-          "courier trackingId status milestones.status milestones.at shippedAt outForDeliveryAt deliveredAt",
-        )
-        .lean();
+      const [shipment, invoice] = await Promise.all([
+        Shipment.findOne({
+          order: order._id,
+          direction: ShipmentDirection.FORWARD,
+        })
+          .select(
+            "courier trackingId status milestones.status milestones.at shippedAt outForDeliveryAt deliveredAt",
+          )
+          .lean(),
+        orderInvoiceService.summaryForOrder(order._id),
+      ]);
       const unchanged = await Order.exists({
         _id: order._id,
         user: actor._id,
         orderNumber,
         __v: order.__v,
       });
-      if (unchanged) return customerOrderDetail(order, shipment);
+      if (unchanged) return customerOrderDetail(order, shipment, invoice);
     }
 
     throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {

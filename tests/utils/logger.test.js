@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import pino from "pino";
 import { REDACTED_PATHS, SENSITIVE_KEYS } from "../../src/utils/logger.js";
+import { requestPath } from "../../src/middleware/requestContext.js";
 
 /**
  * Builds a logger with the production redaction configuration that writes to an
@@ -115,5 +116,14 @@ describe("log redaction", () => {
       expect(REDACTED_PATHS).toContain(key);
       expect(REDACTED_PATHS).toContain(`*.${key}`);
     }
+  });
+});
+
+describe("HTTP request-path logging", () => {
+  it("never includes query strings in access-log paths", () => {
+    expect(requestPath({ path: "/api/orders" })).toBe("/api/orders");
+    expect(requestPath({ url: "/api/search?q=private-value" })).toBe(
+      "/api/search",
+    );
   });
 });

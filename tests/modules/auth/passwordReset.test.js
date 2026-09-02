@@ -82,6 +82,23 @@ describe("POST /api/auth/forgot-password", () => {
     expect(serialised).not.toMatch(/token/i);
   });
 
+  it("records transport-neutral request metadata on reset intents", async () => {
+    const { registration } = await registerUser(app);
+
+    const response = await request(app)
+      .post("/api/auth/forgot-password")
+      .set("User-Agent", "Task 76 reset browser")
+      .set("X-Forwarded-For", "198.51.100.18")
+      .send({ email: registration.email });
+
+    expect(response.status).toBe(200);
+    const record = await PasswordResetToken.findOne().lean();
+    expect(record).toMatchObject({
+      requestedUserAgent: "Task 76 reset browser",
+      requestedIp: "198.51.100.18",
+    });
+  });
+
   it("stores only a hash of the token", async () => {
     const { registration } = await registerUser(app);
 

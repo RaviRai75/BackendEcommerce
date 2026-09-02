@@ -49,7 +49,7 @@ export function requestId(req, res, next) {
  * HTTP access log. Health checks are logged at `debug` so uptime probes do not
  * drown the log; genuine errors are logged at `error`.
  */
-function requestPath(req) {
+export function requestPath(req) {
   return req.path ?? req.url?.split("?", 1)[0] ?? "";
 }
 

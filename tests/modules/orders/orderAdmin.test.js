@@ -325,6 +325,7 @@ describe("admin order operations", () => {
         paidAt: null,
       },
       shipment: null,
+      invoice: { available: false },
       availableActions: [
         OrderFulfillmentAction.RECORD_SHIPMENT,
         OrderFulfillmentAction.CANCEL,
@@ -344,6 +345,7 @@ describe("admin order operations", () => {
       "shippingAddress",
       "pricing",
       "coupon",
+      "invoice",
       "deliveredAt",
       "releasedAt",
       "releaseReason",

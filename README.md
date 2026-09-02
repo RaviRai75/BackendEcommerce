@@ -101,7 +101,7 @@ Do not copy backend variables into the frontend. In particular, database URLs, J
 1. Provision MongoDB and create a least-privilege application user.
 2. Set `MONGODB_URI` and `MONGODB_DB_NAME` in the uncommitted `.env` or deployment secret store.
 3. Use a transaction-capable replica set for production; standalone MongoDB is not a valid production checkout deployment.
-4. Synchronize declared indexes:
+4. Create schema-declared indexes additively (the command never drops manually managed or rolling-migration indexes):
 
    ```powershell
    npm run db:indexes
@@ -125,6 +125,19 @@ Remove-Item Env:ADMIN_PASSWORD
 ```
 
 Replace the placeholders locally and clear the process-scoped variable immediately afterward.
+
+## Normal-order invoice policy
+
+Invoices are disabled until an immutable policy is explicitly published. Do not guess the effective date, eligible-order date, legal name, or complete printed address. After every fact and the non-GST status are confirmed, publish version 1 with explicit ISO-8601 timing:
+
+```powershell
+npm run invoice:publish -- --version=1 --effective-from=2026-09-01T00:00:00+05:30 --eligible-order-from=2026-09-01T00:00:00+05:30 --legal-name="CONFIRMED LEGAL NAME" --address-lines="CONFIRMED STREET ADDRESS|CONFIRMED LOCALITY" --state="CONFIRMED STATE" --state-code="CONFIRMED TWO-DIGIT CODE" --pincode="CONFIRMED SIX-DIGIT PINCODE" --confirm-non-gst=true
+npm run db:indexes
+```
+
+Replace every example value and placeholder with explicitly approved facts. Optional `--brand-name`, `--email`, and `--phone` values are omitted or use the approved brand `Sanchandana` as applicable. Invoice contract version 1 always uses prefix `SAN`, six-digit sequences, and non-GST `NONE` modes; these are not publication options.
+
+Policies are append-only. To change seller or tax facts, publish a higher version with a later effective date; never modify an issued invoice or an existing policy. With no effective policy, shipment still succeeds but no invoice is issued. Orders older than the selected policy's eligible-order date, historical orders, and CustomOrder records remain excluded. The current policy is non-GST and does not implement GSTIN, HSN/SAC, tax rates, CGST/SGST/IGST, IRN, e-invoice, B2B, or custom-order invoicing.
 
 ## Cloudinary setup
 
@@ -176,20 +189,21 @@ Production must route the storefront's same-origin `/api/*` requests to this ser
 
 ## Development commands
 
-| Command                            | Purpose                                         |
-| ---------------------------------- | ----------------------------------------------- |
-| `npm run dev`                      | Start the API with Node's file watcher.         |
-| `npm start`                        | Start the API without watch mode.               |
-| `npm test`                         | Run the Vitest suite once.                      |
-| `npm run test:watch`               | Run Vitest in interactive watch mode.           |
-| `npm run db:indexes`               | Synchronize database indexes.                   |
-| `npm run seed -- --mode=reference` | Run reference seeders.                          |
-| `npm run seed -- --only=pincodes`  | Run only the pincode seeder.                    |
-| `npm run notifications:dispatch`   | Claim and dispatch one notification batch.      |
-| `npm run media:preflight`          | Validate media-provider migration readiness.    |
-| `npm run media:reconcile`          | Reconcile media-provider assets.                |
-| `npm run create:admin -- ...`      | Create an administrator using `ADMIN_PASSWORD`. |
-| `npm run audit`                    | Audit production dependencies.                  |
+| Command                            | Purpose                                                             |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| `npm run dev`                      | Start the API with Node's file watcher.                             |
+| `npm start`                        | Start the API without watch mode.                                   |
+| `npm test`                         | Run the Vitest suite once.                                          |
+| `npm run test:watch`               | Run Vitest in interactive watch mode.                               |
+| `npm run db:indexes`               | Add missing schema-declared indexes without dropping other indexes. |
+| `npm run invoice:publish -- ...`   | Publish one explicit immutable normal-order invoice policy.         |
+| `npm run seed -- --mode=reference` | Run reference seeders.                                              |
+| `npm run seed -- --only=pincodes`  | Run only the pincode seeder.                                        |
+| `npm run notifications:dispatch`   | Claim and dispatch one notification batch.                          |
+| `npm run media:preflight`          | Validate media-provider migration readiness.                        |
+| `npm run media:reconcile`          | Reconcile media-provider assets.                                    |
+| `npm run create:admin -- ...`      | Create an administrator using `ADMIN_PASSWORD`.                     |
+| `npm run audit`                    | Audit production dependencies.                                      |
 
 ## Production build
 
@@ -215,9 +229,13 @@ A production deployment must provide:
 - SMTP delivery and a managed notification-encryption key/key ID
 - centralized secret storage, structured-log collection, health checks, and graceful shutdown time
 
-Before releasing, run `npm run media:preflight` and `npm run db:indexes`. Schedule `npm run notifications:dispatch` and `npm run media:reconcile` externally; they are finite jobs, not in-process schedulers. If scaling horizontally, preserve database transactions and move rate-limit coordination to a shared store before relying on per-process limits.
+Before releasing, run `npm run media:preflight` and `npm run db:indexes`. The index command is additive; destructive index removal requires a separate reviewed migration. Schedule `npm run notifications:dispatch` and `npm run media:reconcile` externally; they are finite jobs, not in-process schedulers. If scaling horizontally, preserve database transactions and move rate-limit coordination to a shared store before relying on per-process limits.
+
+Complete the source and deployment gates in [`docs/SECURITY.md`](docs/SECURITY.md), including approved RPO/RTO values, monitored backups, and a measured restore drill. Source review does not establish that production TLS, secrets, proxy headers, schedules, backups, or provider settings are correct.
 
 ## Security notes
+
+The authoritative source-review findings, recovery runbook, residual risks, and release checklist are in [`docs/SECURITY.md`](docs/SECURITY.md). It deliberately leaves deployment-only checks open until an operator records evidence.
 
 - Never commit `.env`, credentials, private keys, tokens, customer data, or production exports.
 - Use strong, unrelated access/refresh JWT secrets and rotate them through managed secrets.

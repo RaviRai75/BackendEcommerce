@@ -324,6 +324,7 @@ describe("customer order reads", () => {
       },
       pricing: { finalTotalPaise: 29_000 },
       coupon: { code: "WELCOME", discountPaise: 1_000 },
+      invoice: { available: false },
     });
     expect(Object.keys(response.body.data)).toEqual([
       "orderNumber",
@@ -338,6 +339,7 @@ describe("customer order reads", () => {
       "shippingAddress",
       "pricing",
       "coupon",
+      "invoice",
       "tracking",
       "history",
     ]);

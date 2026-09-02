@@ -4,7 +4,7 @@
  * Middleware order matters and is deliberate:
  *   1. trust proxy      — so `req.ip` is the real client behind the host's proxy
  *   2. security headers — before anything can produce a response
- *   3. private admin cache policy — before CORS/body/rate-limit rejection
+ *   3. private-read cache policy — before CORS/body/rate-limit rejection
  *   4. request id + log — so every rejection is traceable
  *   5. CORS             — must run before routes, including preflight
  *   6. body parsing     — with hard size limits
@@ -39,21 +39,57 @@ import { apiRouter } from "./routes/index.js";
  * future server-rendered response. The storefront ships its own CSP at the
  * hosting layer, where the exact Cloudinary and payment domains are known.
  */
-const contentSecurityPolicy = {
-  useDefaults: true,
-  directives: {
-    defaultSrc: ["'none'"],
-    baseUri: ["'none'"],
-    formAction: ["'none'"],
-    frameAncestors: ["'none'"],
-    imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
-    connectSrc: ["'self'"],
-    scriptSrc: ["'none'"],
-    styleSrc: ["'none'"],
-    objectSrc: ["'none'"],
-    upgradeInsecureRequests: isProduction ? [] : null,
-  },
-};
+export function createSecurityHeadersOptions(production = isProduction) {
+  return {
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+        imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
+        connectSrc: ["'self'"],
+        scriptSrc: ["'none'"],
+        styleSrc: ["'none'"],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: production ? [] : null,
+      },
+    },
+    crossOriginResourcePolicy: { policy: "same-site" },
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    // HSTS is valid only after HTTPS is established at the deployment edge.
+    hsts: production
+      ? { maxAge: 15552000, includeSubDomains: true, preload: false }
+      : false,
+  };
+}
+
+export function createPrivateReadMatcher(apiPrefix) {
+  const normalizedApiPrefix = apiPrefix.toLowerCase().replace(/\/+$/, "");
+  const withApiPrefix = (path) => `${normalizedApiPrefix}${path}`;
+  const privateReadPrefixes = [withApiPrefix("/admin")];
+  const privateReadPaths = new Set([
+    withApiPrefix("/cart"),
+    withApiPrefix("/wishlist"),
+    withApiPrefix("/referrals/me"),
+  ]);
+
+  return (method, originalUrl) => {
+    const path = (originalUrl?.split("?", 1)[0] ?? "").toLowerCase();
+    const normalizedPath =
+      path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+    const isRead = method === "GET" || method === "HEAD";
+    const isPrivateRead =
+      privateReadPaths.has(normalizedPath) ||
+      privateReadPrefixes.some(
+        (prefix) =>
+          normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
+      );
+
+    return isRead && isPrivateRead;
+  };
+}
 
 export function createApp() {
   const app = express();
@@ -67,18 +103,7 @@ export function createApp() {
   // Reject `?a[b]=c`-style deep query objects we never use.
   app.set("query parser", "simple");
 
-  app.use(
-    helmet({
-      contentSecurityPolicy,
-      crossOriginResourcePolicy: { policy: "same-site" },
-      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-      // Enabled only in production, and only once HTTPS is confirmed
-      // (security §12).
-      hsts: isProduction
-        ? { maxAge: 15552000, includeSubDomains: true, preload: false }
-        : false,
-    }),
-  );
+  app.use(helmet(createSecurityHeadersOptions()));
   // Not covered by Helmet's defaults; limits access to powerful browser APIs.
   app.use((_req, res, next) => {
     res.setHeader(
@@ -88,20 +113,9 @@ export function createApp() {
     next();
   });
 
-  const privateAdminPrefixes = [
-    `${env.API_PREFIX}/admin/products`,
-    `${env.API_PREFIX}/admin/categories`,
-    `${env.API_PREFIX}/admin/collections`,
-    `${env.API_PREFIX}/admin/media`,
-  ];
+  const isPrivateRead = createPrivateReadMatcher(env.API_PREFIX);
   app.use((req, res, next) => {
-    const path = (req.originalUrl?.split("?", 1)[0] ?? "").toLowerCase();
-    if (
-      privateAdminPrefixes.some((configuredPrefix) => {
-        const prefix = configuredPrefix.toLowerCase();
-        return path === prefix || path.startsWith(`${prefix}/`);
-      })
-    ) {
+    if (isPrivateRead(req.method, req.originalUrl)) {
       res.set("Cache-Control", "private, no-store");
     }
     next();

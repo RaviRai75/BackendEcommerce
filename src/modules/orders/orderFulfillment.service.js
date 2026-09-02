@@ -24,6 +24,7 @@ import { auditService } from "../system/audit.service.js";
 import { AuditAction, AuditTargetType } from "../system/auditLog.model.js";
 import { User } from "../users/user.model.js";
 import { adminOrderDetail, adminOrderListItem } from "./order.dto.js";
+import { orderInvoiceService } from "./orderInvoice.service.js";
 import {
   Order,
   OrderFulfillmentAction,
@@ -197,7 +198,7 @@ async function compareAndSet({
     },
     { new: false, runValidators: true, session },
   ).select(
-    "orderNumber __v user shippingAddress.email shippingAddress.recipientName placementStatus paymentMethod paymentStatus fulfillmentStatus items",
+    "orderNumber __v user shippingAddress pricing coupon createdAt placementStatus paymentMethod paymentStatus fulfillmentStatus items",
   );
 
   if (!previous) await ensureConflictOrNotFound(orderNumber, session);
@@ -332,7 +333,7 @@ async function cancelOrder(actor, orderNumber, input, requestId, session) {
     },
     { new: false, runValidators: true, session },
   ).select(
-    "orderNumber __v user shippingAddress.email shippingAddress.recipientName placementStatus paymentMethod paymentStatus fulfillmentStatus items",
+    "orderNumber __v user shippingAddress pricing coupon createdAt placementStatus paymentMethod paymentStatus fulfillmentStatus items",
   );
 
   if (!previous) await ensureConflictOrNotFound(orderNumber, session);
@@ -389,6 +390,12 @@ async function applyAction(actor, orderNumber, input, requestId, session) {
         session,
       });
       await createForwardShipment({ actor, result, input, session });
+      result.invoice = await orderInvoiceService.issueForShipment({
+        order: result.previous,
+        actor,
+        issuedAt: result.at,
+        session,
+      });
       return result;
     }
     case OrderFulfillmentAction.MARK_OUT_FOR_DELIVERY: {
@@ -462,6 +469,26 @@ async function auditAccepted({ actor, input, result, req, session }) {
     },
     session,
   );
+
+  if (result.invoice) {
+    await auditService.recordStrict(
+      {
+        action: AuditAction.INVOICE_ISSUED,
+        actor,
+        targetType: AuditTargetType.INVOICE,
+        targetId: result.invoice._id,
+        targetLabel: result.invoice.invoiceNumber,
+        metadata: {
+          orderNumber: result.previous.orderNumber,
+          invoiceNumber: result.invoice.invoiceNumber,
+          financialYear: result.invoice.financialYear,
+          policyVersion: result.invoice.policyVersion,
+        },
+        req,
+      },
+      session,
+    );
+  }
 }
 
 const FULFILLMENT_NOTIFICATION_TYPE_FOR = Object.freeze({
@@ -638,6 +665,7 @@ async function loadAdminOrder(orderNumber, { session = null } = {}) {
 
     let shipment;
     let exchanges;
+    let invoice;
     if (session) {
       shipment = await shipmentQuery.lean();
       await populateSequentially(
@@ -647,21 +675,25 @@ async function loadAdminOrder(orderNumber, { session = null } = {}) {
         session,
       );
       exchanges = await exchangesQuery.lean();
+      invoice = await orderInvoiceService.summaryForOrder(order._id, {
+        session,
+      });
     } else {
-      [shipment, exchanges] = await Promise.all([
+      [shipment, exchanges, invoice] = await Promise.all([
         shipmentQuery.lean(),
         exchangesQuery.lean(),
+        orderInvoiceService.summaryForOrder(order._id),
       ]);
     }
 
-    if (session) return adminOrderDetail(order, shipment, exchanges);
+    if (session) return adminOrderDetail(order, shipment, exchanges, invoice);
 
     const unchanged = await Order.exists({
       _id: order._id,
       orderNumber,
       __v: order.__v,
     });
-    if (unchanged) return adminOrderDetail(order, shipment, exchanges);
+    if (unchanged) return adminOrderDetail(order, shipment, exchanges, invoice);
   }
 
   throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {

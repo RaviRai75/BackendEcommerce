@@ -47,6 +47,26 @@ describe("POST /api/auth/refresh", () => {
     expect(response.body.data.user.email).toBeTypeOf("string");
   });
 
+  it("records transport-neutral request metadata on the rotated session", async () => {
+    const { refreshToken, csrfToken } = await registerUser(app);
+
+    const response = await postWithSession(app, "/api/auth/refresh", {
+      refreshToken,
+      csrfToken,
+    })
+      .set("User-Agent", "Task 76 session browser")
+      .set("X-Forwarded-For", "203.0.113.24");
+
+    expect(response.status).toBe(200);
+    const activeSession = await Session.findOne({
+      revokedAt: { $exists: false },
+    }).lean();
+    expect(activeSession).toMatchObject({
+      userAgent: "Task 76 session browser",
+      ipAddress: "203.0.113.24",
+    });
+  });
+
   it("rotates the refresh token, so the old one stops working", async () => {
     const { refreshToken, csrfToken } = await registerUser(app);
 

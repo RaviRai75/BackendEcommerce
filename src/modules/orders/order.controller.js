@@ -2,6 +2,8 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { sendPaginated, sendSuccess } from "../../utils/response.js";
 import { orderService } from "./order.service.js";
 import { orderFulfillmentService } from "./orderFulfillment.service.js";
+import { renderOrderInvoicePdf } from "./orderInvoice.pdf.js";
+import { orderInvoiceService } from "./orderInvoice.service.js";
 
 function preventPrivateCaching(res) {
   res.set("Cache-Control", "private, no-store");
@@ -55,4 +57,26 @@ export const performAdminOrderAction = asyncHandler(async (req, res) => {
       req.serviceContext,
     ),
   );
+});
+
+function sendInvoicePdf(res, rendered) {
+  preventPrivateCaching(res);
+  res.status(200);
+  res.type("application/pdf");
+  res.attachment(rendered.filename);
+  res.set("Content-Length", String(rendered.buffer.length));
+  res.send(rendered.buffer);
+}
+
+export const downloadOrderInvoice = asyncHandler(async (req, res) => {
+  const invoice = await orderInvoiceService.getMine(
+    req.user,
+    req.params.orderNumber,
+  );
+  sendInvoicePdf(res, await renderOrderInvoicePdf(invoice));
+});
+
+export const downloadAdminOrderInvoice = asyncHandler(async (req, res) => {
+  const invoice = await orderInvoiceService.getForAdmin(req.params.orderNumber);
+  sendInvoicePdf(res, await renderOrderInvoicePdf(invoice));
 });

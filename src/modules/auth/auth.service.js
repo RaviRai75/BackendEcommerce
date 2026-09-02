@@ -65,14 +65,18 @@ async function equaliseTiming(candidatePassword) {
  * Context recorded against a session, so a customer can be shown where they are
  * signed in and an incident can be investigated.
  *
- * @param {import('express').Request} req
+ * @param {object} [context] transport-neutral request metadata or an Express request
  */
-function requestContext(req) {
+function requestContext(context) {
   return {
     // Truncated: a user agent can be arbitrarily long, and only the first part is
-    // informative.
-    userAgent: req?.get?.("user-agent")?.slice(0, 255),
-    ipAddress: req?.ip?.slice(0, 45),
+    // informative. Controllers pass `req.serviceContext`; direct service callers
+    // may still pass an Express request.
+    userAgent: (context?.userAgent ?? context?.get?.("user-agent"))?.slice?.(
+      0,
+      255,
+    ),
+    ipAddress: (context?.ipAddress ?? context?.ip)?.slice?.(0, 45),
   };
 }
 

@@ -173,7 +173,11 @@ function customerTracking(order, shipment) {
   };
 }
 
-export function customerOrderDetail(order, shipment = null) {
+function invoiceCapability(invoice) {
+  return { available: Boolean(invoice) };
+}
+
+export function customerOrderDetail(order, shipment = null, invoice = null) {
   const value = valueOf(order);
   return {
     orderNumber: value.orderNumber,
@@ -194,6 +198,7 @@ export function customerOrderDetail(order, shipment = null) {
     coupon: value.coupon
       ? { code: value.coupon.code, discountPaise: value.coupon.discountPaise }
       : null,
+    invoice: invoiceCapability(invoice),
     tracking: customerTracking(value, shipment),
     history: [...value.statusHistory]
       .sort((left, right) => new Date(left.at) - new Date(right.at))
@@ -361,7 +366,12 @@ export function adminOrderListItem(order) {
   };
 }
 
-export function adminOrderDetail(order, shipment = null, exchanges = []) {
+export function adminOrderDetail(
+  order,
+  shipment = null,
+  exchanges = [],
+  invoice = null,
+) {
   const value = valueOf(order);
   return {
     orderNumber: value.orderNumber,
@@ -383,6 +393,7 @@ export function adminOrderDetail(order, shipment = null, exchanges = []) {
     coupon: value.coupon
       ? { code: value.coupon.code, discountPaise: value.coupon.discountPaise }
       : null,
+    invoice: invoiceCapability(invoice),
     deliveredAt: value.deliveredAt ?? null,
     releasedAt: value.releasedAt ?? null,
     releaseReason: value.releaseReason ?? null,

@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "seed": "node scripts/seed.js",
     "db:indexes": "node scripts/syncIndexes.js",
+    "invoice:publish": "node scripts/publishInvoicePolicy.js",
     "notifications:dispatch": "node scripts/processNotifications.js",
     "media:preflight": "node scripts/verifyMediaMigration.js",
     "media:reconcile": "node scripts/reconcileMedia.js",
@@ -35,6 +36,7 @@
     "jsonwebtoken": "9.0.2",
     "mongoose": "8.24.4",
     "nodemailer": "9.0.5",
+    "pdfkit": "0.20.1",
     "pino": "9.6.0",
     "pino-http": "10.4.0",
     "zod": "3.24.1"

@@ -142,18 +142,20 @@ export function isDatabaseConnected() {
 }
 
 /**
- * Builds every index declared by a registered schema.
+ * Creates every index declared by a registered schema without dropping indexes.
  *
  * In production `autoIndex` is off, so this is run explicitly as a deployment
- * step. It is safe to re-run: MongoDB ignores an index that already exists.
+ * step. `createIndexes()` is additive: it preserves manually managed indexes and
+ * indexes retained for a rolling migration. MongoDB ignores equivalent indexes
+ * that already exist, so the operation is safe to re-run.
  *
  * @returns {Promise<Array<{ model: string, indexes: number }>>}
  */
-export async function syncIndexes() {
+export async function ensureDeclaredIndexes() {
   const results = [];
   for (const name of mongoose.modelNames()) {
     const model = mongoose.model(name);
-    await model.syncIndexes();
+    await model.createIndexes();
     const indexes = await model.collection.indexes();
     results.push({ model: name, indexes: indexes.length });
   }

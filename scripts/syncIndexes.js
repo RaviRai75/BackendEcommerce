@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Builds every index declared by the models.
+ * Creates every index declared by the models without dropping other indexes.
  *
  * `autoIndex` is disabled in production (see src/config/database.js), because
  * implicitly building indexes on boot can stall a deploy and mask a mistake.
@@ -8,18 +8,19 @@
  *
  *   npm run db:indexes
  *
- * Safe to re-run — MongoDB ignores an index that already exists.
+ * Safe to re-run — MongoDB ignores an equivalent index that already exists,
+ * while manually managed and rolling-migration indexes are preserved.
  */
 import {
   connectDatabase,
   disconnectDatabase,
-  syncIndexes,
+  ensureDeclaredIndexes,
 } from "../src/config/database.js";
 import { env } from "../src/config/env.js";
 import { assertMediaAssetMigrationReady } from "../src/services/media/mediaMigration.js";
 
-// Importing a model registers it with Mongoose, which is what `syncIndexes`
-// iterates over. Every model must be imported here to be included.
+// Importing a model registers it with Mongoose, which is what
+// `ensureDeclaredIndexes` iterates over. Every model must be imported here.
 import "../src/modules/users/user.model.js";
 import "../src/modules/auth/session.model.js";
 import "../src/modules/auth/passwordResetToken.model.js";
@@ -37,6 +38,9 @@ import "../src/modules/cart/abandonedCartEvent.model.js";
 import "../src/modules/addresses/address.model.js";
 import "../src/modules/coupons/coupon.model.js";
 import "../src/modules/orders/order.model.js";
+import "../src/modules/orders/orderInvoicePolicy.model.js";
+import "../src/modules/orders/orderInvoiceSequence.model.js";
+import "../src/modules/orders/orderInvoice.model.js";
 import "../src/modules/orders/customerCommerceState.model.js";
 import "../src/modules/orders/inventoryTransaction.model.js";
 import "../src/modules/orders/couponRedemption.model.js";
@@ -75,7 +79,7 @@ async function main() {
   await connectDatabase();
   await assertMediaAssetMigrationReady();
 
-  const results = await syncIndexes();
+  const results = await ensureDeclaredIndexes();
 
   console.log("");
   for (const { model, indexes } of results.sort((a, b) =>
