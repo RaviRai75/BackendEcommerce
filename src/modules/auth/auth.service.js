@@ -256,8 +256,10 @@ export const authService = {
    * @param {string} input.email
    * @param {string} input.password
    * @param {import('express').Request} [req]
+   * @param {object} [options]
+   * @param {"USER"|"ADMIN"} [options.requiredRole]
    */
-  async login({ email, password }, req) {
+  async login({ email, password }, req, { requiredRole } = {}) {
     // `passwordHash` is `select: false`, so it must be asked for explicitly.
     const user = await User.findOne({ email }).select("+passwordHash");
 
@@ -311,6 +313,16 @@ export const authService = {
       throw new AppError(ErrorCode.INVALID_CREDENTIALS);
     }
 
+    // Customer and administration entry points deliberately issue sessions only
+    // for their own role. A correct password at the wrong entry point is still a
+    // failed authentication attempt: record it through the same bounded path as
+    // a wrong password so the response, audit, timing, and lockout behavior do
+    // not reveal that the credentials were otherwise valid.
+    if (requiredRole && user.role !== requiredRole) {
+      await this.recordFailedLogin(user, req, "wrong_entry_point");
+      throw new AppError(ErrorCode.INVALID_CREDENTIALS);
+    }
+
     // Successful login clears the failure counters and, if the cost parameters
     // have been raised since this hash was made, upgrades it transparently.
     const updates = {
@@ -359,13 +371,14 @@ export const authService = {
    *
    * @param {import('mongoose').Document} user
    * @param {import('express').Request} [req]
+   * @param {string} [reason]
    */
-  async recordFailedLogin(user, req) {
+  async recordFailedLogin(user, req, reason = "wrong_password") {
     await auditAdminLogin(
       user,
       AuditAction.ADMIN_LOGIN_FAILED,
       AuditOutcome.FAILURE,
-      "wrong_password",
+      reason,
       req,
     );
 

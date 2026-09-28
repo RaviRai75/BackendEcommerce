@@ -20,6 +20,7 @@ import {
   forgotPassword,
   listSessions,
   login,
+  adminLogin,
   logout,
   logoutAll,
   refresh,
@@ -52,6 +53,15 @@ authRoutes.post(
   authLimiter,
   validate({ body: loginSchema }),
   login,
+);
+
+// Uses the same generic credential contract and limiter, but the service issues
+// a session only when the database-backed account role is ADMIN.
+authRoutes.post(
+  "/auth/admin/login",
+  authLimiter,
+  validate({ body: loginSchema }),
+  adminLogin,
 );
 
 /**

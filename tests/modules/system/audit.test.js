@@ -112,11 +112,11 @@ describe("authentication security events", () => {
     await promoteToAdmin(account.registration.email);
 
     const success = await request(app)
-      .post("/api/auth/login")
+      .post("/api/auth/admin/login")
       .set("User-Agent", "Admin browser")
       .send({ email: account.registration.email, password: VALID_PASSWORD });
     const failure = await request(app)
-      .post("/api/auth/login")
+      .post("/api/auth/admin/login")
       .set("User-Agent", "Admin browser")
       .send({
         email: account.registration.email,

@@ -19,6 +19,7 @@ import {
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { sendCreated, sendSuccess } from "../../utils/response.js";
 import { authService } from "./auth.service.js";
+import { UserRole } from "../users/user.model.js";
 import { createCsrfToken } from "./token.service.js";
 
 /**
@@ -48,9 +49,19 @@ export const register = asyncHandler(async (req, res) => {
   sendCreated(res, completeAuthentication(res, result));
 });
 
-/** POST /auth/login — PUBLIC */
+/** POST /auth/login — PUBLIC CUSTOMER ENTRY */
 export const login = asyncHandler(async (req, res) => {
-  const result = await authService.login(req.body, req.serviceContext);
+  const result = await authService.login(req.body, req.serviceContext, {
+    requiredRole: UserRole.USER,
+  });
+  sendSuccess(res, completeAuthentication(res, result));
+});
+
+/** POST /auth/admin/login — PUBLIC ADMINISTRATOR ENTRY */
+export const adminLogin = asyncHandler(async (req, res) => {
+  const result = await authService.login(req.body, req.serviceContext, {
+    requiredRole: UserRole.ADMIN,
+  });
   sendSuccess(res, completeAuthentication(res, result));
 });
 
