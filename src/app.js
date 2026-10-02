@@ -13,7 +13,7 @@
  *   9. routes
  *  10. 404 then the error handler — always last
  *
- * The app is exported without listening so tests can drive it in-process
+ * The app is exported without listening so tests can drive it in-processs
  * (supertest) and `server.js` owns the lifecycle.
  */
 import express from "express";
