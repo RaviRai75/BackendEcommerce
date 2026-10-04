@@ -34,8 +34,11 @@ export function validate(schemas) {
         const parsed = schema.parse(req[target] ?? {});
 
         if (target === 'query' || target === 'params') {
-          // `req.query` and `req.params` are getter-backed in Express 4;
-          // mutating in place is safer than reassigning.
+          // Clear and re-fill rather than reassigning. In Express 4.22 both are
+          // ordinary properties — `req.query` is assigned by the query middleware
+          // and `req.params` by the router — so either approach works today;
+          // mutating in place keeps the existing object identity and stays
+          // correct if a future version installs them as getters again.
           for (const key of Object.keys(req[target])) delete req[target][key];
           Object.assign(req[target], parsed);
         } else {

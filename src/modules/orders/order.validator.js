@@ -50,6 +50,15 @@ export const placeOrderSchema = strictObject({
   paymentMethod: z.enum(Object.values(OrderPaymentMethod)),
 });
 
+/**
+ * Customer cancellation accepts only an optional short reason. It never carries
+ * a status, a refund instruction or any commercial field — the server decides
+ * the transition from the stored order.
+ */
+export const cancelOrderSchema = strictObject({
+  reason: z.string().trim().min(1).max(100).optional(),
+});
+
 export const idempotencyKeySchema = z
   .string()
   .min(32)

@@ -75,6 +75,7 @@ describe("site settings administration boundary", () => {
     expect(response.body.data).toEqual({
       announcement: DEFAULT_ANNOUNCEMENT,
       homeHeroMedia: null,
+      homeBackgroundMedia: null,
     });
     expect(await SiteSettings.countDocuments()).toBe(0);
   });
@@ -140,12 +141,14 @@ describe("site settings administration boundary", () => {
     expect(saved.body.data.announcement).toEqual({
       enabled: false,
       message: "",
+      linkUrl: "",
       tone: DEFAULT_ANNOUNCEMENT.tone,
     });
     expect(toned.status).toBe(200);
     expect(toned.body.data.announcement).toEqual({
       enabled: false,
       message: "",
+      linkUrl: "",
       tone: "cream",
     });
     expect(publicRead.body.data.announcement).toEqual(
@@ -268,12 +271,14 @@ describe("site settings administration boundary", () => {
     expect(toned.body.data.announcement).toEqual({
       enabled: false,
       message: "Orders dispatch on Monday",
+      linkUrl: "",
       tone: "cream",
     });
     expect(enabled.status).toBe(200);
     expect(enabled.body.data.announcement).toEqual({
       enabled: true,
       message: "Now shipping across India",
+      linkUrl: "",
       tone: "cream",
     });
     expect(await SiteSettings.countDocuments()).toBe(1);

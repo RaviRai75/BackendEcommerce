@@ -703,3 +703,148 @@ describe("authenticated order placement boundary", () => {
     );
   });
 });
+
+describe("customer order cancellation (D80)", () => {
+  const cancel = (account, orderNumber, requestBody = {}) =>
+    request(app)
+      .post(`/api/orders/${encodeURIComponent(orderNumber)}/cancel`)
+      .set(bearer(account))
+      .send(requestBody);
+
+  async function placedOrder(options = {}) {
+    const { account, product } = await readyCart(options);
+    const response = await place(account, body(options.body), key(options.key));
+    if (response.status !== 201) {
+      throw new Error(
+        `placement failed: ${response.status} ${JSON.stringify(response.body)}`,
+      );
+    }
+    return {
+      account,
+      product,
+      orderNumber: response.body.data.orderNumber,
+      response,
+    };
+  }
+
+  const releaseCount = (orderId) =>
+    InventoryTransaction.countDocuments({
+      order: orderId,
+      reason: InventoryReason.ORDER_RELEASED,
+    });
+
+  const cancelAuditCount = (orderId) =>
+    AuditLog.countDocuments({
+      action: AuditAction.ORDER_CANCELLED,
+      targetId: orderId,
+    });
+
+  it("cancels an unpaid unfulfilled order, restoring stock and writing exactly one release entry", async () => {
+    const { account, product, orderNumber } = await placedOrder();
+    expect((await Product.findById(product._id)).variants[0].stock).toBe(4);
+
+    const cancelled = await cancel(account, orderNumber, {
+      reason: "Changed my mind",
+    });
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body.data).toMatchObject({
+      orderNumber,
+      placementStatus: "RELEASED",
+      paymentStatus: "CANCELLED",
+      fulfillmentStatus: "CANCELLED",
+    });
+
+    const order = await Order.findOne({ orderNumber }).lean();
+    expect(order.placementStatus).toBe("RELEASED");
+    expect(order.fulfillmentStatus).toBe("CANCELLED");
+    expect(order.releasedAt).toBeInstanceOf(Date);
+    expect(order.releaseReason).toBe("Cancelled by customer: Changed my mind");
+
+    expect((await Product.findById(product._id)).variants[0].stock).toBe(5);
+    expect(await releaseCount(order._id)).toBe(1);
+    expect(await cancelAuditCount(order._id)).toBe(1);
+  });
+
+  it("treats a repeat cancellation as a no-op that never restores stock twice", async () => {
+    const { account, product, orderNumber } = await placedOrder();
+
+    expect((await cancel(account, orderNumber)).status).toBe(200);
+    expect((await cancel(account, orderNumber)).status).toBe(200);
+
+    const order = await Order.findOne({ orderNumber }).lean();
+    expect((await Product.findById(product._id)).variants[0].stock).toBe(5);
+    expect(await releaseCount(order._id)).toBe(1);
+    expect(await cancelAuditCount(order._id)).toBe(1);
+  });
+
+  it("does not let one customer cancel another customer's order", async () => {
+    const { orderNumber } = await placedOrder();
+    const stranger = await registerUser(app);
+
+    const response = await cancel(stranger, orderNumber);
+    expect(response.status).toBe(404);
+    expect((await Order.findOne({ orderNumber }).lean()).placementStatus).toBe(
+      "PLACED",
+    );
+  });
+
+  it("refuses cancellation once the order has entered fulfilment", async () => {
+    const { account, orderNumber } = await placedOrder();
+    await Order.updateOne(
+      { orderNumber },
+      { $set: { fulfillmentStatus: "PROCESSING" } },
+    );
+
+    const response = await cancel(account, orderNumber);
+    expect(response.status).toBe(409);
+    expect((await Order.findOne({ orderNumber }).lean()).placementStatus).toBe(
+      "PLACED",
+    );
+  });
+
+  it("refuses cancellation of an already-paid order and points to support", async () => {
+    const { account, orderNumber } = await placedOrder();
+    await Order.updateOne(
+      { orderNumber },
+      { $set: { paymentStatus: "PREPAID_CONFIRMED" } },
+    );
+
+    const response = await cancel(account, orderNumber);
+    expect(response.status).toBe(409);
+    expect(response.body.error.message).toMatch(/contact support/i);
+    expect((await Order.findOne({ orderNumber }).lean()).placementStatus).toBe(
+      "PLACED",
+    );
+  });
+
+  it("rejects a mass-assigned status or an over-long reason", async () => {
+    const { account, orderNumber } = await placedOrder();
+
+    expect(
+      (await cancel(account, orderNumber, { status: "CANCELLED" })).status,
+    ).toBe(422);
+    expect(
+      (await cancel(account, orderNumber, { reason: "x".repeat(101) })).status,
+    ).toBe(422);
+    expect((await Order.findOne({ orderNumber }).lean()).placementStatus).toBe(
+      "PLACED",
+    );
+  });
+
+  it("requires authentication and fails closed without transactions", async () => {
+    const { account, orderNumber } = await placedOrder();
+
+    const anonymous = await request(app)
+      .post(`/api/orders/${encodeURIComponent(orderNumber)}/cancel`)
+      .send({});
+    expect(anonymous.status).toBe(401);
+
+    transactionMode.supported = false;
+    expect((await cancel(account, orderNumber)).status).toBe(503);
+    transactionMode.supported = true;
+
+    expect((await Order.findOne({ orderNumber }).lean()).placementStatus).toBe(
+      "PLACED",
+    );
+  });
+});

@@ -1,7 +1,26 @@
+import { mediaService } from "../../services/media/media.service.js";
+
 function plain(value) {
   return value?.toObject ? value.toObject() : value;
 }
 const id = (value) => value?._id?.toString?.() ?? value?.toString?.() ?? null;
+
+function referenceDto(item) {
+  if (!item) return null;
+  const delivery = item.publicId
+    ? mediaService.deliveryForMedia({
+        type: "IMAGE",
+        publicId: item.publicId,
+      })
+    : null;
+  return {
+    assetId: item.assetId?.toString?.() ?? item.assetId,
+    publicId: item.publicId,
+    url: delivery?.optimizedUrl ?? item.url,
+    altText: item.altText ?? "",
+    ...(delivery ? { delivery } : {}),
+  };
+}
 function publicHistory(history = []) {
   return history.map((entry) => ({
     action: entry.action,
@@ -100,7 +119,7 @@ export function customerCustomRequestDto(
     policy: { revision: value.policy.revision, hash: value.policy.hash },
     requirements: value.requirements,
     sizing: sizingDto(value.sizing),
-    references: value.references ?? [],
+    references: (value.references ?? []).map(referenceDto).filter(Boolean),
     status: value.status,
     priority: value.priority,
     quote: quoteDto(quote, boundPolicy),

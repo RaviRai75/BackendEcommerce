@@ -49,10 +49,32 @@ export const cloudinaryProvider = {
     try {
       preset = await cloudinary.api.upload_preset(name);
     } catch (error) {
-      throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {
-        message: "Media uploads are briefly unavailable.",
-        cause: error,
-      });
+      const is404 =
+        error?.http_code === 404 ||
+        error?.error?.http_code === 404 ||
+        /not found|can't find/i.test(
+          error?.message || error?.error?.message || "",
+        );
+      if (is404) {
+        try {
+          preset = await cloudinary.api.create_upload_preset({
+            name,
+            unsigned: false,
+            max_file_size: maxBytes,
+            allowed_formats: [...formats].sort().join(","),
+          });
+        } catch (createError) {
+          throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {
+            message: "Media uploads are briefly unavailable.",
+            cause: createError,
+          });
+        }
+      } else {
+        throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {
+          message: "Media uploads are briefly unavailable.",
+          cause: error,
+        });
+      }
     }
     const settings = preset?.settings ?? {};
     const allowedFormats = Array.isArray(settings.allowed_formats)
@@ -65,8 +87,10 @@ export const cloudinaryProvider = {
     const presetFormats = [...new Set(allowedFormats)].sort();
     if (
       preset?.unsigned !== false ||
-      Number(settings.max_file_size) !== maxBytes ||
-      JSON.stringify(presetFormats) !== JSON.stringify(expectedFormats)
+      (settings.max_file_size != null &&
+        Number(settings.max_file_size) !== maxBytes) ||
+      (allowedFormats.length > 0 &&
+        JSON.stringify(presetFormats) !== JSON.stringify(expectedFormats))
     ) {
       throw new AppError(ErrorCode.SERVICE_UNAVAILABLE, {
         message: "Media upload policy is not configured safely.",
@@ -155,5 +179,25 @@ export const cloudinaryProvider = {
         ],
       }),
     };
+  },
+
+  deliveryUrl(publicId, options) {
+    return deliveryUrl(publicId, options);
+  },
+
+  optimizedImageUrl(publicId, { width, height, crop = "limit" } = {}) {
+    const transformation = [];
+    if (width || height) {
+      transformation.push({
+        crop,
+        ...(width ? { width } : {}),
+        ...(height ? { height } : {}),
+      });
+    }
+    transformation.push({ fetch_format: "auto", quality: "auto" });
+    return deliveryUrl(publicId, {
+      resource_type: "image",
+      transformation,
+    });
   },
 };

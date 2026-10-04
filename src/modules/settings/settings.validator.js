@@ -6,6 +6,7 @@ import { AnnouncementTone } from "./settings.model.js";
 const announcementPatchSchema = strictObject({
   enabled: z.boolean().optional(),
   message: z.string().trim().max(200).optional(),
+  linkUrl: z.string().trim().max(500).optional().or(z.literal("")),
   tone: z.enum(Object.values(AnnouncementTone)).optional(),
 })
   .superRefine((value, context) => {
@@ -64,6 +65,7 @@ export const updateSettingsSchema = strictObject({
   referralProgram: referralProgramPatchSchema.optional(),
   loyaltyProgram: loyaltyProgramPatchSchema.optional(),
   homeHeroMedia: verifiedImageAttachmentSchema.nullable().optional(),
+  homeBackgroundMedia: verifiedImageAttachmentSchema.nullable().optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: "Provide at least one field to update.",
 });

@@ -1,7 +1,7 @@
 import { env } from "../../config/env.js";
 import { productService } from "../products/product.service.js";
 
-const BRAND_NAME = "Sanchandana";
+const BRAND_NAME = "Dhanalakshmi Fashion";
 const MAX_META_DESCRIPTION_LENGTH = 300;
 
 function escapeHtml(value) {

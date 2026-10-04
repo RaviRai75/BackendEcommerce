@@ -68,9 +68,13 @@ function publicSettings(settings) {
       message: announcementWasAuthored
         ? (settings?.announcement?.message ?? "")
         : "",
+      linkUrl: announcementWasAuthored
+        ? (settings?.announcement?.linkUrl ?? "")
+        : "",
       tone: settings?.announcement?.tone ?? DEFAULT_ANNOUNCEMENT.tone,
     },
     homeHeroMedia: mediaDto(settings?.homeHeroMedia),
+    homeBackgroundMedia: mediaDto(settings?.homeBackgroundMedia),
   };
 }
 
@@ -80,6 +84,9 @@ function adminSettings(settings) {
     referralProgram: referralProgramDto(settings?.referralProgram),
     loyaltyProgram: loyaltyProgramDto(settings?.loyaltyProgram),
     homeHeroMedia: mediaDto(settings?.homeHeroMedia, {
+      includeManagement: true,
+    }),
+    homeBackgroundMedia: mediaDto(settings?.homeBackgroundMedia, {
       includeManagement: true,
     }),
     id: settings?._id?.toString() ?? null,
@@ -106,6 +113,9 @@ function changedFieldPaths(input) {
     }
   }
   if (Object.hasOwn(input, "homeHeroMedia")) fields.push("homeHeroMedia");
+  if (Object.hasOwn(input, "homeBackgroundMedia")) {
+    fields.push("homeBackgroundMedia");
+  }
   return fields;
 }
 
@@ -180,6 +190,13 @@ export const settingsService = {
           label: "home hero media",
         });
       }
+      if (input.homeBackgroundMedia) {
+        await mediaService.assertReadyMedia(input.homeBackgroundMedia, {
+          purpose: MediaPurpose.HOME_HERO,
+          session,
+          label: "home background media",
+        });
+      }
 
       const current = await inSession(
         SiteSettings.findOne({ key: SETTINGS_SINGLETON_KEY }),
@@ -195,6 +212,10 @@ export const settingsService = {
           current?.announcement?.authored === true,
         enabled: input.announcement?.enabled ?? currentAnnouncement.enabled,
         message: input.announcement?.message ?? currentAnnouncement.message,
+        linkUrl:
+          input.announcement?.linkUrl !== undefined
+            ? input.announcement.linkUrl
+            : (currentAnnouncement.linkUrl ?? ""),
         tone: input.announcement?.tone ?? currentAnnouncement.tone,
       };
       if (announcement.enabled && announcement.message.length === 0) {
@@ -259,6 +280,9 @@ export const settingsService = {
       }
       if (Object.hasOwn(input, "homeHeroMedia")) {
         update.$set.homeHeroMedia = input.homeHeroMedia;
+      }
+      if (Object.hasOwn(input, "homeBackgroundMedia")) {
+        update.$set.homeBackgroundMedia = input.homeBackgroundMedia;
       }
 
       return SiteSettings.findOneAndUpdate(

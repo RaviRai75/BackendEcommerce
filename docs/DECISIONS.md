@@ -966,3 +966,42 @@ CustomRequest and CustomOrder remain excluded under D45 because their quote-char
 **Why.** A legal/commercial document must preserve exactly what was issued, use concurrency-safe identity, follow the business's actual registration status, and share the shipment transaction so a dispatched eligible order cannot commit without its invoice. Effective-dated policy snapshots permit future GST support without recalculating or relabelling historical documents.
 
 **Cost.** Operations must publish the first policy only after confirming the missing legal name/address and effective date. Until then, invoices remain unavailable by design. A later GST launch still requires CA-approved rates, supply/place-of-supply rules, document wording, numbering/e-invoice applicability, and migration tests before a new policy mode can be enabled.
+
+## D80 — Customer cancellation is a narrow, self-service release of an unpaid order
+
+**Decision.** This supersedes the clause in D26 that stated "there are intentionally
+no public read, admin, payment, status-patch or cancellation routes". A customer
+may cancel **their own** order through `POST /orders/:orderNumber/cancel`, but only
+while all three of the following hold: `placementStatus = PLACED`,
+`fulfillmentStatus = UNFULFILLED`, and `paymentStatus ∈ {COD_DUE, PREPAID_PENDING}`.
+Ownership comes from the authenticated account, never from the request body.
+
+The transition reuses the same release path as the internal placement release:
+inside one transaction it restores exact variant quantities, writes the unique
+`ORDER_RELEASED` ledger entry per line, releases the coupon redemption and
+decrements both global and per-customer counters, then marks the placement, payment
+and fulfillment axes cancelled with one history entry each. Cancelling an
+already-cancelled order is a no-op that replays the receipt. Two racing requests
+cannot double-restore stock: the `{order, variant, reason}` unique index on
+`InventoryTransaction` rejects the second release, and the transaction retry then
+observes `RELEASED` and replays.
+
+The route is deliberately **narrower than the administrator action**, which may
+cancel `UNFULFILLED`, `PROCESSING` or `PACKED`. A customer cannot cancel an order
+that has entered fulfilment, and cannot cancel a `PREPAID_CONFIRMED` order at all,
+because that requires a refund — a payment-domain operation. Both refusals return a
+customer-safe message pointing to support rather than silently releasing the order.
+Cancellation is audited as `ORDER_CANCELLED` with `initiatedBy: CUSTOMER`.
+
+**Why.** Spec §24 lists *Cancelled* in the customer-facing lifecycle and the
+business is low-volume and manual, so self-service cancellation removes avoidable
+support load. Reusing the existing release path means there is exactly one
+implementation of the stock/coupon restoration invariant, and restricting it to
+unpaid, unfulfilled orders keeps the operation reversible without any payment or
+refund coupling — the area where a mistake would be financially real.
+
+**Cost.** A customer who wants to cancel a paid or in-fulfilment order must go
+through support. Extending self-service cancellation to paid orders is blocked on
+an approved refund contract and the same adapter work D1 defers; the window itself
+is not currently admin-configurable and would need a settings field before the
+business can tune it.

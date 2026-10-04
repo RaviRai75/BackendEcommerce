@@ -114,7 +114,7 @@ const copy = Object.freeze({
   ],
   [NotificationType.CUSTOM_REQUEST_ADMIN_REPLIED]: [
     "Custom request reply",
-    "Sanchandana replied to your custom request.",
+    "Dhanalakshmi Fashion replied to your custom request.",
   ],
   [NotificationType.CUSTOM_REQUEST_INFORMATION_NEEDED]: [
     "Information needed",
@@ -253,17 +253,17 @@ export function renderEmailTemplate({
     if (!token) throw new TypeError("Password reset envelope is incomplete.");
     const name = controlledValue(envelope.name, 80) || "there";
     const resetUrl = `${env.STOREFRONT_URL}/reset-password#token=${encodeURIComponent(token)}`;
-    const subject = "Reset your Sanchandana password";
+    const subject = "Reset your Dhanalakshmi Fashion password";
     const text = [
       `Hello ${name},`,
       "",
-      "We received a request to reset the password on your Sanchandana account.",
+      "We received a request to reset the password on your Dhanalakshmi Fashion account.",
       `Open this link to choose a new password: ${resetUrl}`,
       "",
       `The link expires in ${env.PASSWORD_RESET_TTL_MINUTES} minutes and can be used once.`,
       "If you did not ask for this, you can ignore this email — nothing has changed.",
     ].join("\n");
-    const html = `<p>Hello ${escapeHtml(name)},</p><p>We received a request to reset the password on your Sanchandana account.</p><p><a href="${escapeHtml(resetUrl)}">Choose a new password</a></p><p>The link expires in ${env.PASSWORD_RESET_TTL_MINUTES} minutes and can be used once.</p><p>If you did not ask for this, you can ignore this email — nothing has changed.</p>`;
+    const html = `<p>Hello ${escapeHtml(name)},</p><p>We received a request to reset the password on your Dhanalakshmi Fashion account.</p><p><a href="${escapeHtml(resetUrl)}">Choose a new password</a></p><p>The link expires in ${env.PASSWORD_RESET_TTL_MINUTES} minutes and can be used once.</p><p>If you did not ask for this, you can ignore this email — nothing has changed.</p>`;
     return { subject, text, html };
   }
 

@@ -21,8 +21,10 @@ const FORBIDDEN_KEY = /^\$|\./;
 const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
- * Recursively removes forbidden keys, mutating in place so Express's own
- * getters (notably `req.query`) keep working.
+ * Recursively removes forbidden keys, mutating the existing objects in place so
+ * their identity is preserved. (`req.query` and `req.params` are ordinary
+ * properties in Express 4.22 — set by the query middleware and the router
+ * respectively — so clearing keys in place avoids depending on that detail.)
  *
  * @param {unknown} value
  * @param {{ removed: string[] }} report

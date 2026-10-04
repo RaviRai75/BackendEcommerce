@@ -155,7 +155,7 @@ async function renderOrderInvoicePdfV1(invoice) {
       Title: `Invoice ${invoice.invoiceNumber}`,
       Author: invoice.seller.brandName,
       Subject: `Order ${invoice.orderNumber}`,
-      Creator: "Sanchandana invoice service",
+      Creator: "Dhanalakshmi Fashion invoice service",
     },
   });
   doc.registerFont("InvoiceSans", FONT_PATH);

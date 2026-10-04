@@ -38,6 +38,17 @@ export const placeOrder = asyncHandler(async (req, res) => {
   sendSuccess(res, result.receipt, { status: result.replayed ? 200 : 201 });
 });
 
+export const cancelOrder = asyncHandler(async (req, res) => {
+  const result = await orderService.cancelMine(
+    req.user,
+    req.params.orderNumber,
+    req.body,
+    req.serviceContext,
+  );
+  preventPrivateCaching(res);
+  sendSuccess(res, result.receipt);
+});
+
 export const listAdminOrders = asyncHandler(async (req, res) => {
   const result = await orderFulfillmentService.list(req.query);
   sendPaginated(res, result.orders, result);

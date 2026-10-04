@@ -20,6 +20,7 @@ export const AnnouncementTone = {
 export const DEFAULT_ANNOUNCEMENT = Object.freeze({
   enabled: false,
   message: "",
+  linkUrl: "",
   tone: AnnouncementTone.WINE,
 });
 
@@ -87,6 +88,7 @@ const announcementSchema = new mongoose.Schema(
     authored: { type: Boolean, required: true, default: false },
     enabled: { type: Boolean, required: true, default: false },
     message: shortText({ max: 200 }),
+    linkUrl: shortText({ max: 500 }),
     tone: {
       type: String,
       required: true,
@@ -238,6 +240,7 @@ const settingsSchema = createSchema(
       },
     },
     homeHeroMedia: { type: imageAttachmentSchema, default: null },
+    homeBackgroundMedia: { type: imageAttachmentSchema, default: null },
   },
   { collection: "siteSettings" },
 );
@@ -289,5 +292,6 @@ settingsSchema.pre(
 );
 
 settingsSchema.index({ "homeHeroMedia.assetId": 1 });
+settingsSchema.index({ "homeBackgroundMedia.assetId": 1 });
 
 export const SiteSettings = registerModel("SiteSettings", settingsSchema);

@@ -802,4 +802,8 @@ export const mediaService = {
   deliveryForProductMedia(media) {
     return this.deliveryForMedia(media);
   },
+
+  optimizedImageUrl(publicId, options) {
+    return cloudinaryProvider.optimizedImageUrl(publicId, options);
+  },
 };

@@ -478,6 +478,40 @@ const CUSTOMER_ORDER_DETAIL_FIELDS = [
   "updatedAt",
 ].join(" ");
 
+/**
+ * Applies the terminal "released/cancelled" state to an order inside its own
+ * transaction. Shared by the internal placement release and the customer
+ * cancellation route so both produce an identical record: resources restored,
+ * the three lifecycle axes cancelled, and one history entry per axis.
+ */
+async function releaseOrderPlacement({ order, reason, at, session }) {
+  await releaseOrderResources({ order, reason, at, session });
+  order.placementStatus = OrderPlacementStatus.RELEASED;
+  order.paymentStatus = OrderPaymentStatus.CANCELLED;
+  order.fulfillmentStatus = OrderFulfillmentStatus.CANCELLED;
+  order.releasedAt = at;
+  order.releaseReason = reason;
+  order.statusHistory.push(
+    { domain: "PLACEMENT", status: OrderPlacementStatus.RELEASED, reason, at },
+    { domain: "PAYMENT", status: OrderPaymentStatus.CANCELLED, reason, at },
+    {
+      domain: "FULFILLMENT",
+      status: OrderFulfillmentStatus.CANCELLED,
+      reason,
+      at,
+    },
+  );
+}
+
+/** A fixed, non-spoofable prefix keeps customer text out of the internal reason field. */
+function customerCancellationReason(note) {
+  const trimmed = String(note ?? "")
+    .trim()
+    .slice(0, 100);
+  return (trimmed ? `Cancelled by customer: ${trimmed}` : "Cancelled by customer")
+    .slice(0, 160);
+}
+
 export const orderService = {
   async listMine(actor, { page, limit, status }) {
     const filter = customerOrderFilter(actor._id, status);
@@ -765,37 +799,12 @@ export const orderService = {
       if (!assertPlacementReleasable(order))
         return { replayed: true, receipt: orderReceipt(order) };
       const releasedAt = new Date();
-      await releaseOrderResources({
+      await releaseOrderPlacement({
         order,
         reason: normalizedReason,
         at: releasedAt,
         session,
       });
-      order.placementStatus = OrderPlacementStatus.RELEASED;
-      order.paymentStatus = OrderPaymentStatus.CANCELLED;
-      order.fulfillmentStatus = OrderFulfillmentStatus.CANCELLED;
-      order.releasedAt = releasedAt;
-      order.releaseReason = normalizedReason;
-      order.statusHistory.push(
-        {
-          domain: "PLACEMENT",
-          status: OrderPlacementStatus.RELEASED,
-          reason: normalizedReason,
-          at: order.releasedAt,
-        },
-        {
-          domain: "PAYMENT",
-          status: OrderPaymentStatus.CANCELLED,
-          reason: normalizedReason,
-          at: order.releasedAt,
-        },
-        {
-          domain: "FULFILLMENT",
-          status: OrderFulfillmentStatus.CANCELLED,
-          reason: normalizedReason,
-          at: order.releasedAt,
-        },
-      );
       await order.save({ session });
       return { replayed: false, receipt: orderReceipt(order), order };
     });
@@ -812,6 +821,77 @@ export const orderService = {
           totals: orderReceipt(result.order).pricing,
         },
       });
+    return { replayed: result.replayed, receipt: result.receipt };
+  },
+
+  /**
+   * Customer-initiated cancellation of an unpaid, unfulfilled order.
+   *
+   * Deliberately narrower than the administrator action. A customer may cancel
+   * only while the order is still UNFULFILLED and nothing has been paid. A
+   * confirmed prepaid order requires a refund — a payment-domain operation a
+   * customer cannot trigger — so it is refused with a support pointer rather
+   * than silently released. Cancelling twice is a no-op that replays the receipt,
+   * and the unique ORDER_RELEASED ledger index makes a double stock release
+   * impossible even if two requests race.
+   */
+  async cancelMine(actor, orderNumber, input, req) {
+    if (!(await supportsTransactions())) throw settingsUnavailable();
+    const userId = actor._id;
+    const reason = customerCancellationReason(input?.reason);
+
+    const result = await runTransaction(async (session) => {
+      const order = await Order.findOne({ user: userId, orderNumber }).session(
+        session,
+      );
+      if (!order) throw new AppError(ErrorCode.ORDER_NOT_FOUND);
+
+      // Already cancelled — a replay is a success, not an error.
+      if (order.placementStatus === OrderPlacementStatus.RELEASED)
+        return { replayed: true, receipt: orderReceipt(order), order };
+
+      if (order.fulfillmentStatus !== OrderFulfillmentStatus.UNFULFILLED)
+        throw new AppError(ErrorCode.INVALID_STATUS_TRANSITION, {
+          message:
+            "This order has already entered fulfilment and can no longer be cancelled online. Please contact support.",
+        });
+      if (order.paymentStatus === OrderPaymentStatus.PREPAID_CONFIRMED)
+        throw new AppError(ErrorCode.INVALID_STATUS_TRANSITION, {
+          message:
+            "This order has already been paid. Please contact support to cancel it.",
+        });
+      if (order.paymentStatus === OrderPaymentStatus.CANCELLED)
+        throw new AppError(ErrorCode.INVALID_STATUS_TRANSITION, {
+          message: "This order is no longer cancellable.",
+        });
+
+      const cancelledAt = new Date();
+      await releaseOrderPlacement({
+        order,
+        reason,
+        at: cancelledAt,
+        session,
+      });
+      await order.save({ session });
+      return { replayed: false, receipt: orderReceipt(order), order };
+    });
+
+    if (!result.replayed) {
+      await auditService.record({
+        action: AuditAction.ORDER_CANCELLED,
+        actor,
+        targetType: AuditTargetType.ORDER,
+        targetId: result.order._id,
+        targetLabel: result.order.orderNumber,
+        metadata: {
+          orderNumber: result.order.orderNumber,
+          initiatedBy: "CUSTOMER",
+          itemCount: result.order.itemCount,
+          totals: orderReceipt(result.order).pricing,
+        },
+        req,
+      });
+    }
     return { replayed: result.replayed, receipt: result.receipt };
   },
 };
