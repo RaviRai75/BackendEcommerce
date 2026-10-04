@@ -193,6 +193,12 @@ const envSchema = z
       .regex(/^[A-Za-z0-9_-]+$/, "must be a valid Cloudinary preset name")
       .optional(),
 
+    // --- Artificial Intelligence --------------------------------------------
+    GEMINI_API_KEY: z.string().trim().optional(),
+
+    // --- Google Maps / Places & Geocoding -----------------------------------
+    GOOGLE_MAPS_API_KEY: z.string().trim().optional(),
+
     // --- Request limits -----------------------------------------------------
     JSON_BODY_LIMIT_KB: positiveInt(64),
     UPLOAD_MAX_SIZE_MB: positiveInt(5),

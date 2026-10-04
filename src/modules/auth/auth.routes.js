@@ -6,7 +6,7 @@
  * and derive the account id exclusively from `req.user`.
  */
 import { Router } from "express";
-import { requireAuth } from "../../middleware/auth.js";
+import { optionalAuth, requireAuth } from "../../middleware/auth.js";
 import { privateNoStore as preventPrivateCaching } from "../../middleware/cachePolicy.js";
 import { requireCsrfToken } from "../../middleware/csrf.js";
 import {
@@ -26,7 +26,9 @@ import {
   refresh,
   register,
   resetPassword,
+  sendVerification,
   updatePreferences,
+  verifyEmail,
 } from "./auth.controller.js";
 import {
   changePasswordSchema,
@@ -34,10 +36,30 @@ import {
   loginSchema,
   registerSchema,
   resetPasswordSchema,
+  sendVerificationSchema,
   updatePreferencesSchema,
+  verifyEmailSchema,
 } from "./auth.validator.js";
 
 export const authRoutes = Router();
+
+// PUBLIC / HYBRID VERIFICATION
+
+authRoutes.post(
+  "/auth/send-verification",
+  authLimiter,
+  optionalAuth,
+  validate({ body: sendVerificationSchema }),
+  sendVerification,
+);
+
+authRoutes.post(
+  "/auth/verify-email",
+  authLimiter,
+  optionalAuth,
+  validate({ body: verifyEmailSchema }),
+  verifyEmail,
+);
 
 // PUBLIC
 

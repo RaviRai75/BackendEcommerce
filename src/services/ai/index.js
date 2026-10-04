@@ -14,7 +14,7 @@ const ChatIntent = Object.freeze({
 });
 
 const PRODUCT_DISCOVERY_PATTERN =
-  /\b(show|find|shop|browse|looking|recommend|suggest|wear|outfit|dress|dresses|saree|sari|kurta|lehenga|wedding|party|festive|occasion|casual|office|colour|color|fabric|budget|under|below)\b/i;
+  /\b(show|find|shop|browse|looking|recommend|suggest|wear|outfit|dress|dresses|lehenga|lehengas|pavada|pattu|choli|blouse|frock|frocks|lacha|kurti|kurtis|kurta|kurtas|salwar|suit|suits|dupatta|dupattas|jhumka|jhumkas|jewellery|jewelry|necklace|choker|kids|girl|girls|baby|toddler|wedding|party|festive|ceremony|occasion|casual|office|colour|color|fabric|silk|velvet|budget|under|below|price)\b/i;
 const SHOPPING_COMMAND_PREFIX =
   /^(?:please\s+)?(?:show\s+me|find\s+me|help\s+me\s+find|suggest|recommend|i(?:'m|\s+am)\s+looking\s+for|looking\s+for|what\s+should\s+i\s+wear\s+(?:for|to))\s+/i;
 const BARE_BUDGET_PATTERN =

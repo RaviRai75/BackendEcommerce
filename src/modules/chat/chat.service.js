@@ -1,4 +1,5 @@
 import { aiService, ChatIntent } from "../../services/ai/index.js";
+import { geminiService } from "../../services/ai/gemini.service.js";
 import { productService } from "../products/product.service.js";
 import { productSearchService } from "../products/productSearch.service.js";
 import { recommendationService } from "../products/recommendation.service.js";
@@ -315,8 +316,21 @@ export const chatService = Object.freeze({
         );
       case ChatIntent.SIZE_GUIDANCE:
         return sizeGuidance(context.productSlug);
-      default:
-        break;
+    }
+
+    const productContext = await productContextOrNull(context.productSlug);
+    const aiAdvice = await geminiService.generateStylistAdvice({
+      message,
+      productContext,
+    });
+
+    if (aiAdvice) {
+      return reply(aiAdvice, {
+        actions: [
+          action(ActionType.SHOP, "Browse collections"),
+          action(ActionType.SIZE_GUIDE, "Open size guide"),
+        ],
+      });
     }
 
     return reply(

@@ -67,3 +67,16 @@ export const changePasswordSchema = strictObject({
 export const updatePreferencesSchema = strictObject({
   marketingConsent: z.boolean(),
 });
+
+export const sendVerificationSchema = strictObject({
+  email: emailSchema.optional(),
+});
+
+export const verifyEmailSchema = strictObject({
+  code: z
+    .string()
+    .trim()
+    .length(6, "Verification code must be 6 digits.")
+    .regex(/^\d{6}$/, "Verification code must be 6 numeric digits."),
+  email: emailSchema.optional(),
+});

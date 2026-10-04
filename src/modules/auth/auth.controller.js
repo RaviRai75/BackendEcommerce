@@ -189,3 +189,21 @@ export const logoutAll = asyncHandler(async (req, res) => {
 
   sendSuccess(res, { signedOut: true, ...result });
 });
+
+/** POST /auth/send-verification — PUBLIC or AUTHENTICATED */
+export const sendVerification = asyncHandler(async (req, res) => {
+  const userId = req.user?._id;
+  const email = req.body?.email || req.user?.email;
+  const result = await authService.sendVerificationCode({ userId, email });
+  sendSuccess(res, result);
+});
+
+/** POST /auth/verify-email — PUBLIC or AUTHENTICATED */
+export const verifyEmail = asyncHandler(async (req, res) => {
+  const userId = req.user?._id;
+  const email = req.body?.email || req.user?.email;
+  const code = req.body?.code;
+  const result = await authService.verifyEmailCode({ userId, email, code });
+  sendSuccess(res, result);
+});
+

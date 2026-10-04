@@ -27,6 +27,8 @@ process.env.CLOUDINARY_API_SECRET = "test-cloudinary-secret";
 process.env.CLOUDINARY_IMAGE_UPLOAD_PRESET = "test-products-images";
 process.env.CLOUDINARY_VIDEO_UPLOAD_PRESET = "test-products-videos";
 
+process.env.GEMINI_API_KEY = "test-gemini-api-key";
+
 process.env.PREPAID_PROVIDER = "MOCK_PREPAID";
 process.env.MOCK_PREPAID_SECRET =
   "test-mock-prepaid-secret-that-is-long-enough";

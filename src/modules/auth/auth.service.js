@@ -35,6 +35,9 @@ import {
   AuditOutcome,
   AuditTargetType,
 } from "../system/auditLog.model.js";
+import crypto from "crypto";
+import { EmailVerificationToken } from "./emailVerificationToken.model.js";
+import { emailService } from "../../services/email/index.js";
 import {
   createPasswordResetToken,
   createRefreshToken,
@@ -43,6 +46,14 @@ import {
 } from "./token.service.js";
 
 const log = createLogger("auth");
+
+export function generateVerificationCode() {
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+export function hashVerificationCode(code) {
+  return crypto.createHash("sha256").update(String(code).trim()).digest("hex");
+}
 
 /**
  * A dummy Argon2id hash of a random value, used to equalise the timing of a login
@@ -239,6 +250,12 @@ export const authService = {
     }
 
     log.info({ userId: user._id.toString() }, "account registered");
+
+    try {
+      await this.sendVerificationCode({ userId: user._id, email: user.email });
+    } catch (err) {
+      log.warn({ err, userId: user._id }, "initial verification email dispatch suppressed error");
+    }
 
     const issued = await issueSession({ user, context: requestContext(req) });
 
@@ -980,5 +997,170 @@ export const authService = {
       signedInAt: session.createdAt,
       expiresAt: session.expiresAt,
     }));
+  },
+
+  /**
+   * Generates a 6-digit OTP verification code, saves the hash, and emails it.
+   */
+  async sendVerificationCode({ userId, email }) {
+    let query = {};
+    if (userId) {
+      query._id = userId;
+    } else if (email) {
+      query.email = email.trim().toLowerCase();
+    } else {
+      throw new AppError(ErrorCode.BAD_REQUEST, {
+        message: "User id or email is required.",
+      });
+    }
+
+    const user = await User.findOne(query);
+    if (!user) {
+      return {
+        success: true,
+        message: "If an account exists, a verification code has been sent.",
+      };
+    }
+
+    if (user.emailVerifiedAt) {
+      return {
+        success: true,
+        alreadyVerified: true,
+        message: "Your email is already verified.",
+      };
+    }
+
+    const code = generateVerificationCode();
+    const codeHash = hashVerificationCode(code);
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+
+    await EmailVerificationToken.deleteMany({ user: user._id });
+
+    await EmailVerificationToken.create({
+      user: user._id,
+      email: user.email,
+      codeHash,
+      expiresAt,
+    });
+
+    const html = `
+      <div style="font-family: 'Marcellus', Georgia, serif; max-width: 560px; margin: 0 auto; background: #FAF8F5; border: 1px solid #E8DFD5; border-radius: 12px; padding: 32px; color: #2C2825;">
+        <div style="text-align: center; margin-bottom: 24px;">
+          <h1 style="color: #722F37; font-size: 24px; margin: 0; letter-spacing: 2px;">DHANALAKSHMI FASHION</h1>
+          <p style="color: #C5A059; font-size: 12px; margin: 4px 0 0; text-transform: uppercase; letter-spacing: 3px;">Authentic Silk Couture</p>
+        </div>
+        <p style="font-size: 16px; line-height: 1.6; color: #2C2825;">Hello ${user.name || "Valued Customer"},</p>
+        <p style="font-size: 15px; line-height: 1.6; color: #645E59;">Please use the following 6-digit verification code to verify your Dhanalakshmi Fashion account:</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <span style="display: inline-block; font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #722F37; background: #FFF; border: 1px solid #C5A059; border-radius: 8px; padding: 12px 28px;">
+            ${code}
+          </span>
+        </div>
+        <p style="font-size: 13px; color: #8A847F; text-align: center;">This code expires in 15 minutes.</p>
+        <hr style="border: none; border-top: 1px solid #E8DFD5; margin: 28px 0;" />
+        <p style="font-size: 12px; color: #8A847F; text-align: center;">If you did not request this, please disregard this email.</p>
+      </div>
+    `;
+
+    const text = `Hello ${user.name || "Customer"},\n\nYour Dhanalakshmi Fashion verification code is: ${code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this, you can ignore this email.`;
+
+    try {
+      await emailService.send({
+        to: user.email,
+        subject: `Your Dhanalakshmi Fashion Verification Code: ${code}`,
+        text,
+        html,
+        messageId: `<verify-${user._id}-${Date.now()}@dhanalakshmifashion.com>`,
+      });
+      log.info({ userId: user._id, email: user.email }, "verification code email dispatched");
+    } catch (err) {
+      log.error({ err, userId: user._id }, "Failed to send verification email");
+    }
+
+    return {
+      success: true,
+      message: "Verification code sent to your email address.",
+    };
+  },
+
+  /**
+   * Validates the 6-digit verification code and updates emailVerifiedAt.
+   */
+  async verifyEmailCode({ userId, email, code }) {
+    if (!code || typeof code !== "string" || code.trim().length !== 6) {
+      throw new AppError(ErrorCode.BAD_REQUEST, {
+        message: "Please provide a valid 6-digit verification code.",
+      });
+    }
+
+    let query = {};
+    if (userId) {
+      query._id = userId;
+    } else if (email) {
+      query.email = email.trim().toLowerCase();
+    } else {
+      throw new AppError(ErrorCode.BAD_REQUEST, {
+        message: "User identity is required.",
+      });
+    }
+
+    const user = await User.findOne(query);
+    if (!user) {
+      throw new AppError(ErrorCode.NOT_FOUND, {
+        message: "Account not found.",
+      });
+    }
+
+    if (user.emailVerifiedAt) {
+      return {
+        success: true,
+        message: "Your email is already verified.",
+        user: user.toPublicProfile(),
+      };
+    }
+
+    const record = await EmailVerificationToken.findOne({
+      user: user._id,
+      usedAt: { $exists: false },
+      expiresAt: { $gt: new Date() },
+    }).sort({ createdAt: -1 });
+
+    if (!record) {
+      throw new AppError(ErrorCode.TOKEN_EXPIRED, {
+        message:
+          "Verification code has expired or has already been used. Please request a new code.",
+      });
+    }
+
+    if (record.attempts >= 5) {
+      throw new AppError(ErrorCode.RATE_LIMITED, {
+        message:
+          "Too many failed attempts. Please request a new verification code.",
+      });
+    }
+
+    const candidateHash = hashVerificationCode(code);
+    if (candidateHash !== record.codeHash) {
+      record.attempts += 1;
+      await record.save();
+      throw new AppError(ErrorCode.INVALID_CREDENTIALS, {
+        message:
+          "Invalid verification code. Please check the code sent to your email.",
+      });
+    }
+
+    record.usedAt = new Date();
+    await record.save();
+
+    user.emailVerifiedAt = new Date();
+    await user.save();
+
+    log.info({ userId: user._id }, "email successfully verified");
+
+    return {
+      success: true,
+      message: "Your email has been verified successfully.",
+      user: user.toPublicProfile(),
+    };
   },
 };
