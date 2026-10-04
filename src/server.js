@@ -26,7 +26,7 @@ async function start() {
     app.listen(env.PORT, () => {
       logger.info(
         { port: env.PORT, prefix: env.API_PREFIX, autoIndex: !isProduction },
-        `Sanchandana API listening on port ${env.PORT}`,
+        `Dhanalakshmi Fashion API listening on port ${env.PORT}`,
       );
     }),
   );

@@ -43,6 +43,41 @@ describe("GET /api/health", () => {
   });
 });
 
+describe("Render and platform root probes", () => {
+  it("answers GET / and HEAD / with 200 OK for platform health checks", async () => {
+    const getRes = await request(app).get("/");
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.status).toBe("ok");
+
+    const headRes = await request(app).head("/");
+    expect(headRes.status).toBe(200);
+  });
+
+  it("answers top-level /health with 200 OK", async () => {
+    const res = await request(app).get("/health");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ok");
+  });
+
+  it("handles Render health check when full URL is supplied in path", async () => {
+    const res = await request(app).head(
+      "/https://backendecommerce-njwg.onrender.com/",
+    );
+    expect(res.status).toBe(200);
+
+    const getRes = await request(app).get(
+      "/https://backendecommerce-njwg.onrender.com/",
+    );
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.status).toBe("ok");
+  });
+
+  it("answers GET /favicon.ico with 204 No Content", async () => {
+    const res = await request(app).get("/favicon.ico");
+    expect(res.status).toBe(204);
+  });
+});
+
 describe("GET /api/ready", () => {
   it("reports 503 while the database is not connected", async () => {
     // No database connection is opened by this suite, which is exactly the

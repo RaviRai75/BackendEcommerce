@@ -31,7 +31,16 @@ export const corsOptions = {
     // there is nothing to allow or deny here — authorization still applies.
     if (!origin) return callback(null, true);
 
-    if (env.CORS_ALLOWED_ORIGINS.includes(origin)) {
+    const allowed = new Set(env.CORS_ALLOWED_ORIGINS);
+    if (env.STOREFRONT_URL) {
+      try {
+        allowed.add(new URL(env.STOREFRONT_URL).origin);
+      } catch {
+        allowed.add(env.STOREFRONT_URL);
+      }
+    }
+
+    if (allowed.has(origin)) {
       return callback(null, true);
     }
 

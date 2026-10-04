@@ -161,6 +161,52 @@ export function createApp() {
   app.use(sanitizeRequest);
   app.use(globalLimiter);
 
+  // 1. Favicon handler: return 204 No Content to avoid log noise
+  app.get("/favicon.ico", (_req, res) => res.status(204).end());
+  app.head("/favicon.ico", (_req, res) => res.status(204).end());
+
+  // 2. Render Health Check Path support:
+  // When users paste their full URL into Render's "Health Check Path" setting,
+  // Render requests "HEAD /https://<service>.onrender.com/" or "GET /https://...".
+  // Intercept this pattern and return 200 OK so the deployment is immediately healthy.
+  app.use((req, res, next) => {
+    const rawUrl = req.url || "";
+    if (/^\/https?:\/?\/?/i.test(rawUrl)) {
+      if (req.method === "HEAD" || req.method === "GET") {
+        return res.status(200).json({
+          success: true,
+          status: "ok",
+          service: "dhanalakshmi-fashion-api",
+          message: "Render health check probe acknowledged.",
+          env: env.NODE_ENV,
+          timestamp: new Date().toISOString(),
+          health: `${env.API_PREFIX}/health`,
+        });
+      }
+      // If a stateful request comes with an accidental leading full URL, strip the origin
+      const cleaned = rawUrl.replace(/^\/https?:\/?[^/]+/i, "") || "/";
+      req.url = cleaned;
+    }
+    next();
+  });
+
+  // 3. Top-level root & health check endpoints for Render, uptime monitors, and browsers
+  app.get(["/", "/health", "/healthz"], (_req, res) => {
+    res.status(200).json({
+      success: true,
+      status: "ok",
+      service: "dhanalakshmi-fashion-api",
+      env: env.NODE_ENV,
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      health: `${env.API_PREFIX}/health`,
+      ready: `${env.API_PREFIX}/ready`,
+    });
+  });
+  app.head(["/", "/health", "/healthz"], (_req, res) => {
+    res.status(200).end();
+  });
+
   app.use(env.API_PREFIX, apiRouter);
 
   app.use(notFound);
