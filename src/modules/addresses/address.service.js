@@ -7,6 +7,7 @@ import {
   ORDER_PLACEMENT_SETTINGS_KEY,
 } from "../orders/orderPlacementSettings.model.js";
 import { Pincode } from "../shipping/pincode.model.js";
+import { pincodeService } from "../shipping/pincode.service.js";
 import { auditService } from "../system/audit.service.js";
 import { AuditAction, AuditTargetType } from "../system/auditLog.model.js";
 import { addressDto } from "./address.dto.js";
@@ -75,10 +76,7 @@ async function canonicalLocality(pincodeValue, session) {
     .lean();
   if (!settings?.enabled) throw unavailable();
 
-  const pincode = await Pincode.findOne({ pincode: pincodeValue })
-    .session(session)
-    .select("pincode city district state")
-    .lean();
+  const pincode = await pincodeService.resolvePincode(pincodeValue, session);
   if (!pincode)
     throw new AppError(ErrorCode.PINCODE_INVALID, {
       message: "We could not verify that pincode.",

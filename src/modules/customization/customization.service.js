@@ -18,6 +18,7 @@ import {
 import { getPaymentCapabilities } from "../../services/payment/index.js";
 import { mediaService } from "../../services/media/media.service.js";
 import { Pincode } from "../shipping/pincode.model.js";
+import { pincodeService } from "../shipping/pincode.service.js";
 import {
   normalizeCourierKey,
   Shipment,
@@ -1190,10 +1191,7 @@ async function sendQuote(actor, requestNumber, input, req) {
 }
 
 async function canonicalAddress(input, session) {
-  const row = await Pincode.findOne({ pincode: input.pincode })
-    .select("pincode city district state")
-    .session(session)
-    .lean();
+  const row = await pincodeService.resolvePincode(input.pincode, session);
   if (!row)
     throw new AppError(ErrorCode.PINCODE_INVALID, {
       message: "We could not verify that pincode.",

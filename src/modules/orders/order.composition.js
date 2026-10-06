@@ -14,6 +14,7 @@ import {
   ProductVariantStatus,
 } from "../products/product.model.js";
 import { Pincode } from "../shipping/pincode.model.js";
+import { pincodeService } from "../shipping/pincode.service.js";
 import { CouponCustomerUsage } from "./couponCustomerUsage.model.js";
 import { OrderPaymentMethod } from "./order.model.js";
 import {
@@ -198,9 +199,10 @@ export async function composeAuthoritativeCheckout({
     .lean();
   if (!settings?.enabled) throw settingsUnavailable();
 
-  const pincode = await Pincode.findOne({ pincode: inputAddress.pincode })
-    .session(session)
-    .lean();
+  const pincode = await pincodeService.resolvePincode(
+    inputAddress.pincode,
+    session,
+  );
   if (!pincode)
     throw new AppError(ErrorCode.PINCODE_INVALID, {
       message: "We could not verify that pincode.",
