@@ -17,7 +17,8 @@ import mongoose, { Types } from "mongoose";
 import { AppError } from "../../utils/AppError.js";
 import { ErrorCode } from "../../utils/errorCodes.js";
 import { createLogger } from "../../utils/logger.js";
-import { isProduction } from "../../config/env.js";
+import { env, isProduction } from "../../config/env.js";
+import { OAuth2Client } from "google-auth-library";
 import { supportsTransactions } from "../../config/database.js";
 import { notificationService } from "../notifications/notification.service.js";
 import {
@@ -376,6 +377,90 @@ export const authService = {
       req,
     );
 
+    return { user, ...issued };
+  },
+
+  /**
+   * Customer Google OAuth sign-in.
+   *
+   * Verifies the Google-issued ID token (credential). If no account exists for
+   * the verified email, a customer account is automatically registered. If one
+   * already exists, it is authenticated.
+   *
+   * @param {object} input
+   * @param {string} input.credential
+   * @param {object} [context]
+   */
+  async googleLogin({ credential }, context) {
+    const clientId = env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      log.error("Google OAuth login attempted but GOOGLE_CLIENT_ID is not configured.");
+      throw new AppError(ErrorCode.INTERNAL_ERROR, "Google login is not configured on the server.");
+    }
+
+    const client = new OAuth2Client(clientId);
+    let payload;
+    try {
+      const ticket = await client.verifyIdToken({
+        idToken: credential,
+        audience: clientId,
+      });
+      payload = ticket.getPayload();
+    } catch (err) {
+      log.warn({ err }, "Google token verification failed");
+      throw new AppError(ErrorCode.INVALID_CREDENTIALS, "Invalid Google sign-in token.");
+    }
+
+    if (!payload?.email) {
+      throw new AppError(ErrorCode.INVALID_CREDENTIALS, "Google account does not provide an email address.");
+    }
+
+    const email = payload.email.trim().toLowerCase();
+    const name = payload.name?.trim() || email.split("@")[0] || "Customer";
+    const emailVerified = Boolean(payload.email_verified);
+
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      const randomSecret = crypto.randomBytes(32).toString("hex");
+      const passwordHash = await hashPassword(randomSecret);
+      user = await User.create({
+        email,
+        name,
+        passwordHash,
+        role: UserRole.USER,
+        emailVerifiedAt: emailVerified ? new Date() : undefined,
+        isActive: true,
+        passwordChangedAt: new Date(),
+      });
+      log.info({ userId: user._id.toString() }, "registered customer via Google OAuth");
+    } else {
+      if (!user.isActive) {
+        log.warn({ userId: user._id.toString() }, "Google login attempt on suspended account");
+        throw new AppError(ErrorCode.INVALID_CREDENTIALS);
+      }
+
+      const updates = {
+        failedLoginAttempts: 0,
+        lockedUntil: undefined,
+        lastLoginAt: new Date(),
+      };
+      if (emailVerified && !user.emailVerifiedAt) {
+        updates.emailVerifiedAt = new Date();
+      }
+
+      await User.updateOne(
+        { _id: user._id },
+        {
+          $set: updates,
+          ...(updates.lockedUntil === undefined ? { $unset: { lockedUntil: 1 } } : {}),
+        },
+      );
+      user = await User.findById(user._id);
+      log.info({ userId: user._id.toString() }, "customer logged in via Google OAuth");
+    }
+
+    const issued = await issueSession({ user, context: requestContext(context) });
     return { user, ...issued };
   },
 

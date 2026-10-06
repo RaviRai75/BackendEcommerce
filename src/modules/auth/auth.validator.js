@@ -80,3 +80,12 @@ export const verifyEmailSchema = strictObject({
     .regex(/^\d{6}$/, "Verification code must be 6 numeric digits."),
   email: emailSchema.optional(),
 });
+
+export const googleLoginSchema = strictObject({
+  credential: z
+    .string()
+    .trim()
+    .min(1, "Google credential token is required.")
+    .max(4096, "Invalid Google credential token."),
+});
+

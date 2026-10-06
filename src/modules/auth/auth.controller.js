@@ -57,6 +57,13 @@ export const login = asyncHandler(async (req, res) => {
   sendSuccess(res, completeAuthentication(res, result));
 });
 
+/** POST /auth/google — PUBLIC GOOGLE OAUTH CUSTOMER ENTRY */
+export const googleLogin = asyncHandler(async (req, res) => {
+  const result = await authService.googleLogin(req.body, req.serviceContext);
+  sendSuccess(res, completeAuthentication(res, result));
+});
+
+
 /** POST /auth/admin/login — PUBLIC ADMINISTRATOR ENTRY */
 export const adminLogin = asyncHandler(async (req, res) => {
   const result = await authService.login(req.body, req.serviceContext, {

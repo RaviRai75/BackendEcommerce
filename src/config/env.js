@@ -199,6 +199,10 @@ const envSchema = z
     // --- Google Maps / Places & Geocoding -----------------------------------
     GOOGLE_MAPS_API_KEY: z.string().trim().optional(),
 
+    // --- Google OAuth --------------------------------------------------------
+    GOOGLE_CLIENT_ID: z.string().trim().optional(),
+    GOOGLE_CLIENT_SECRET: z.string().trim().optional(),
+
     // --- Request limits -----------------------------------------------------
     JSON_BODY_LIMIT_KB: positiveInt(64),
     UPLOAD_MAX_SIZE_MB: positiveInt(5),

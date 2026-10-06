@@ -20,6 +20,7 @@ import {
   forgotPassword,
   listSessions,
   login,
+  googleLogin,
   adminLogin,
   logout,
   logoutAll,
@@ -34,6 +35,7 @@ import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
+  googleLoginSchema,
   registerSchema,
   resetPasswordSchema,
   sendVerificationSchema,
@@ -76,6 +78,14 @@ authRoutes.post(
   validate({ body: loginSchema }),
   login,
 );
+
+authRoutes.post(
+  "/auth/google",
+  authLimiter,
+  validate({ body: googleLoginSchema }),
+  googleLogin,
+);
+
 
 // Uses the same generic credential contract and limiter, but the service issues
 // a session only when the database-backed account role is ADMIN.
