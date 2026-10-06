@@ -33,13 +33,15 @@ function completeAuthentication(
   res,
   { user, accessToken, expiresInSeconds, refreshToken },
 ) {
+  const csrfToken = createCsrfToken();
   res.cookie(REFRESH_COOKIE_NAME, refreshToken, refreshCookieOptions());
-  res.cookie(CSRF_COOKIE_NAME, createCsrfToken(), csrfCookieOptions());
+  res.cookie(CSRF_COOKIE_NAME, csrfToken, csrfCookieOptions());
 
   return {
     user: user.toPublicProfile(),
     accessToken,
     expiresInSeconds,
+    csrfToken,
   };
 }
 

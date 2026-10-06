@@ -41,7 +41,7 @@ export function refreshCookieOptions() {
     // Always true in production. Left off locally because http://localhost
     // would otherwise refuse the cookie.
     secure: isProduction,
-    sameSite: "lax",
+    sameSite: isProduction ? "none" : "lax",
     path: REFRESH_COOKIE_PATH,
     maxAge: env.REFRESH_TOKEN_TTL_DAYS * DAY_MS,
   };
@@ -58,7 +58,7 @@ export function csrfCookieOptions() {
   return {
     httpOnly: false,
     secure: isProduction,
-    sameSite: "lax",
+    sameSite: isProduction ? "none" : "lax",
     // Site-wide: the client reads it once and sends it with every state-changing
     // request that relies on the cookie.
     path: "/",

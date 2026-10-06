@@ -68,19 +68,22 @@ export function requireCsrfToken(req, _res, next) {
   // the double-submit check below is what protects the endpoint.
 
   // --- Double-submit token --------------------------------------------------
-  if (!cookieToken || !headerToken) {
-    log.warn(
-      { requestId: req.id, hasCookie: Boolean(cookieToken), hasHeader: Boolean(headerToken) },
-      'CSRF check failed: token missing',
-    );
-    next(new AppError(ErrorCode.CSRF_FAILED, { meta: { reason: 'missing' } }));
-    return;
-  }
-
-  if (!safeCompare(cookieToken, headerToken)) {
-    log.warn({ requestId: req.id }, 'CSRF check failed: token mismatch');
-    next(new AppError(ErrorCode.CSRF_FAILED, { meta: { reason: 'mismatch' } }));
-    return;
+  if (cookieToken) {
+    if (!headerToken || !safeCompare(cookieToken, headerToken)) {
+      log.warn({ requestId: req.id }, 'CSRF check failed: token mismatch');
+      next(new AppError(ErrorCode.CSRF_FAILED, { meta: { reason: 'mismatch' } }));
+      return;
+    }
+  } else {
+    const isAllowedOrigin = origin && env.CORS_ALLOWED_ORIGINS.includes(origin);
+    if (!isAllowedOrigin || !headerToken) {
+      log.warn(
+        { requestId: req.id, hasCookie: Boolean(cookieToken), hasHeader: Boolean(headerToken) },
+        'CSRF check failed: token missing',
+      );
+      next(new AppError(ErrorCode.CSRF_FAILED, { meta: { reason: 'missing' } }));
+      return;
+    }
   }
 
   next();
