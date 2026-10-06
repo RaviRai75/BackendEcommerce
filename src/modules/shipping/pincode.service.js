@@ -38,6 +38,10 @@ export const pincodeService = {
       return existing;
     }
 
+    if (env.NODE_ENV === "test") {
+      return null;
+    }
+
     // 2. Try Google Geocoding if API key is configured
     const apiKey = env.GOOGLE_MAPS_API_KEY;
     if (apiKey) {

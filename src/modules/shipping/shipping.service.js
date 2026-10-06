@@ -1,5 +1,10 @@
 import { operationalPolicyService } from "../content/operationalPolicy.service.js";
 import { pincodeService } from "./pincode.service.js";
+import {
+  ORDER_PLACEMENT_SETTINGS_KEY,
+  OrderPlacementSettings,
+} from "../orders/orderPlacementSettings.model.js";
+import { Pincode } from "./pincode.model.js";
 
 export const ServiceabilityStatus = Object.freeze({
   SERVICEABLE: "SERVICEABLE",
@@ -89,6 +94,122 @@ export const shippingService = {
     if (policy.data.state !== "AVAILABLE_CURRENT_POLICY") {
       return unavailablePolicy(location);
     }
-    return evaluateServiceability(location, [policy.data.allowedState]);
+
+    const cleanPincode = String(pincode || "").trim();
+    if (policy.data.restrictedPincodes?.includes(cleanPincode)) {
+      return {
+        status: ServiceabilityStatus.UNSERVICEABLE,
+        verified: true,
+        serviceable: false,
+        message: `Delivery is currently restricted for pincode ${cleanPincode}.`,
+        location: publicLocation(location),
+      };
+    }
+
+    if (policy.data.deliveryScope === "ALL_INDIA") {
+      return {
+        status: ServiceabilityStatus.SERVICEABLE,
+        verified: true,
+        serviceable: true,
+        message: "Delivery available to your location.",
+        location: publicLocation(location),
+      };
+    }
+
+    const allowed = policy.data.allowedStates?.length
+      ? policy.data.allowedStates
+      : [policy.data.allowedState || "Karnataka"];
+    return evaluateServiceability(location, allowed);
+  },
+
+  async getAdminSettings() {
+    const settings = await OrderPlacementSettings.findOne({
+      key: ORDER_PLACEMENT_SETTINGS_KEY,
+    }).lean();
+    return {
+      enabled: settings?.enabled ?? true,
+      deliveryScope: settings?.deliveryScope ?? "STATES",
+      allowedStates: settings?.allowedStates ?? ["Karnataka"],
+      allowedState: settings?.allowedState ?? "Karnataka",
+      restrictedPincodes: settings?.restrictedPincodes ?? [],
+      flatDeliveryPaise: settings?.flatDeliveryPaise ?? 9900,
+      freeDeliveryThresholdPaise: settings?.freeDeliveryThresholdPaise ?? 199900,
+      pincodeChargeOverrides: settings?.pincodeChargeOverrides ?? [],
+    };
+  },
+
+  async updateAdminSettings(input) {
+    const settings = await OrderPlacementSettings.findOne({
+      key: ORDER_PLACEMENT_SETTINGS_KEY,
+    });
+    if (!settings) throw new Error("Order placement settings not found.");
+
+    if (input.deliveryScope) {
+      settings.deliveryScope = input.deliveryScope;
+    }
+    if (Array.isArray(input.allowedStates)) {
+      settings.allowedStates = input.allowedStates
+        .map((s) => String(s).trim())
+        .filter(Boolean);
+      if (settings.allowedStates.length > 0) {
+        settings.allowedState = settings.allowedStates[0];
+      }
+    }
+    if (Array.isArray(input.restrictedPincodes)) {
+      settings.restrictedPincodes = [
+        ...new Set(
+          input.restrictedPincodes
+            .map((p) => String(p).trim())
+            .filter((p) => /^[1-9]\d{5}$/.test(p)),
+        ),
+      ];
+    }
+    if (input.flatDeliveryPaise !== undefined) {
+      settings.flatDeliveryPaise = input.flatDeliveryPaise;
+    }
+    if (input.freeDeliveryThresholdPaise !== undefined) {
+      settings.freeDeliveryThresholdPaise = input.freeDeliveryThresholdPaise;
+    }
+    if (Array.isArray(input.pincodeChargeOverrides)) {
+      settings.pincodeChargeOverrides = input.pincodeChargeOverrides;
+    }
+    settings.version = (settings.version || 1) + 1;
+    await settings.save();
+    return this.getAdminSettings();
+  },
+
+  async addManualPincode(data) {
+    const cleanCode = String(data.pincode || "").trim();
+    if (!/^[1-9]\d{5}$/.test(cleanCode)) {
+      throw new Error("Invalid 6-digit pincode.");
+    }
+    const doc = {
+      pincode: cleanCode,
+      city: String(data.city || "").trim(),
+      district: String(data.district || "").trim(),
+      state: String(data.state || "").trim(),
+      source: "admin-manual-entry",
+    };
+    await Pincode.updateOne(
+      { pincode: cleanCode },
+      { $set: doc },
+      { upsert: true },
+    );
+    return doc;
+  },
+
+  async searchPincodes(search) {
+    const clean = String(search || "").trim();
+    const query = clean
+      ? {
+          $or: [
+            { pincode: { $regex: clean, $options: "i" } },
+            { city: { $regex: clean, $options: "i" } },
+            { district: { $regex: clean, $options: "i" } },
+            { state: { $regex: clean, $options: "i" } },
+          ],
+        }
+      : {};
+    return Pincode.find(query).limit(50).lean();
   },
 };

@@ -41,7 +41,20 @@ const schema = createSchema(
         message: "Version must be a whole number.",
       },
     },
-    allowedState: shortText({ required: true, max: 80, enum: ["Karnataka"] }),
+    deliveryScope: {
+      type: String,
+      enum: ["ALL_INDIA", "STATES"],
+      default: "STATES",
+    },
+    allowedStates: {
+      type: [String],
+      default: ["Karnataka"],
+    },
+    allowedState: shortText({ required: false, max: 80, default: "Karnataka" }),
+    restrictedPincodes: {
+      type: [String],
+      default: [],
+    },
     flatDeliveryPaise: paise({ required: true }),
     freeDeliveryThresholdPaise: {
       type: Number,

@@ -147,9 +147,28 @@ async function authoritativeCart(lines, session) {
   };
 }
 
-function canonicalAddress(input, pincode, allowedState) {
-  if (!sameText(pincode.state, allowedState))
+function canonicalAddress(input, pincode, settings) {
+  const cleanCode = String(pincode.pincode || "").trim();
+  const restricted = settings?.restrictedPincodes || [];
+  if (restricted.includes(cleanCode)) {
+    throw new AppError(ErrorCode.OUTSIDE_SERVICE_AREA, {
+      message: `Delivery is currently restricted for pincode ${cleanCode}.`,
+    });
+  }
+
+  const isAllIndia = settings?.deliveryScope === "ALL_INDIA";
+  const allowed = settings?.allowedStates?.length
+    ? settings.allowedStates
+    : [
+        typeof settings === "string"
+          ? settings
+          : settings?.allowedState || "Karnataka",
+      ];
+
+  if (!isAllIndia && !allowed.some((s) => sameText(pincode.state, s))) {
     throw new AppError(ErrorCode.OUTSIDE_SERVICE_AREA);
+  }
+
   const mismatches = {};
   for (const field of ["city", "district", "state"]) {
     if (!sameText(input[field], pincode[field]))
@@ -210,7 +229,7 @@ export async function composeAuthoritativeCheckout({
   const shippingAddress = canonicalAddress(
     inputAddress,
     pincode,
-    settings.allowedState,
+    settings,
   );
   const cartPricing = await authoritativeCart(cartLines, session);
   const effectiveOrderSequence =

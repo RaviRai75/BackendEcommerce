@@ -26,7 +26,6 @@ function validDeliverySettings(settings) {
     settings.key !== ORDER_PLACEMENT_SETTINGS_KEY ||
     !Number.isInteger(settings.version) ||
     settings.version < 1 ||
-    settings.allowedState !== "Karnataka" ||
     !isPaise(settings.flatDeliveryPaise) ||
     !(
       settings.freeDeliveryThresholdPaise === null ||
@@ -99,7 +98,13 @@ export const operationalPolicyService = {
       data: {
         state: "AVAILABLE_CURRENT_POLICY",
         version: settings.version,
-        allowedState: settings.allowedState,
+        deliveryScope: settings.deliveryScope || "STATES",
+        allowedStates:
+          settings.deliveryScope === "ALL_INDIA"
+            ? []
+            : (settings.allowedStates?.length ? settings.allowedStates : [settings.allowedState || "Karnataka"]),
+        allowedState: settings.allowedState || "Karnataka",
+        restrictedPincodes: settings.restrictedPincodes || [],
         standardDeliveryChargePaise: settings.flatDeliveryPaise,
         freeDeliveryThresholdPaise: settings.freeDeliveryThresholdPaise,
         codSurchargePaise: settings.cod.surchargePaise,

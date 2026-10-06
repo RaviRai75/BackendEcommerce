@@ -81,8 +81,22 @@ async function canonicalLocality(pincodeValue, session) {
     throw new AppError(ErrorCode.PINCODE_INVALID, {
       message: "We could not verify that pincode.",
     });
-  if (!sameText(pincode.state, settings.allowedState))
+  const cleanCode = String(pincode.pincode || "").trim();
+  if (settings.restrictedPincodes?.includes(cleanCode)) {
+    throw new AppError(ErrorCode.OUTSIDE_SERVICE_AREA, {
+      message: `Delivery is currently restricted for pincode ${cleanCode}.`,
+    });
+  }
+
+  const isAllIndia = settings.deliveryScope === "ALL_INDIA";
+  const allowed = settings.allowedStates?.length
+    ? settings.allowedStates
+    : [settings.allowedState || "Karnataka"];
+
+  if (!isAllIndia && !allowed.some((s) => sameText(pincode.state, s))) {
     throw new AppError(ErrorCode.OUTSIDE_SERVICE_AREA);
+  }
+
   return {
     pincode: pincode.pincode,
     city: pincode.city,
