@@ -60,13 +60,11 @@ describe("Render and platform root probes", () => {
   });
 
   it("handles Render health check when full URL is supplied in path", async () => {
-    const res = await request(app).head(
-      "/https://backendecommerce-njwg.onrender.com/",
-    );
+    const res = await request(app).head("/https://api.dhanalakshmifashion.in/");
     expect(res.status).toBe(200);
 
     const getRes = await request(app).get(
-      "/https://backendecommerce-njwg.onrender.com/",
+      "/https://api.dhanalakshmifashion.in/",
     );
     expect(getRes.status).toBe(200);
     expect(getRes.body.status).toBe("ok");
